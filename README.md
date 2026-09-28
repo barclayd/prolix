@@ -73,7 +73,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Suggestions need the pull request's own lines and history, not GitHub's merge commit.
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
       - uses: barclayd/prolix@v0
@@ -92,6 +91,21 @@ jobs:
 | `version` | `latest` | the `@prolix/cli` version to run |
 
 The `flagged` output is the number of comments flagged. The summary also goes to the run page.
+
+`ref` and `fetch-depth: 0` check out the pull request's own commits rather than GitHub's merge commit, so suggestions land on the right lines. Without them the action still comments, and warns that it skipped the suggestions.
+
+## Adopting prolix in an existing repo
+
+The action only checks the lines a pull request adds, so turning it on never flags the comments already in a repo. To clear those:
+
+1. Add the workflow first, so new comments are checked from the next pull request.
+2. Remove the backlog in one pull request at `value-add`, which only removes comments that restate the code, disabled code, banners, change notes and signature-only docs. Review the diff like any other, and restore anything worth keeping with `prolix-ignore` added to it. In a large repo, fix a directory at a time (`npx @prolix/cli src/components --level value-add --fix`) so each pull request stays reviewable.
+
+   ```sh
+   npx @prolix/cli --level value-add --fix
+   ```
+
+3. For a stricter bar, set `"level": "necessary"` in `prolix.jsonc` and run `--fix` again. It removes TODOs and clarifying comments too.
 
 ## Levels
 
