@@ -3,6 +3,13 @@ name: release
 on:
   push:
     tags: ["v*.*.*"]
+  # Pull requests publish a canary, which also tests the npm packages before a release.
+  pull_request:
+    paths: ["src/**", "npm/**", "Cargo.*", ".github/workflows/release.yml"]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -30,52 +37,89 @@ jobs:
           name: ${{ matrix.npm }}
           path: target/${{ matrix.target }}/release/prolix${{ contains(matrix.target, 'windows') && '.exe' || '' }}
 
+  # Publishes with npm trusted publishing: npm trades the job's OIDC token for a short-lived one, so there's no npm secret.
+  # Pull requests from forks get no OIDC token, so they only build.
   publish:
     needs: build
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
+      pull-requests: write
+    env:
+      NPM_CONFIG_PROVENANCE: true
     steps:
       - uses: actions/checkout@v4
+      # Trusted publishing needs npm 11.5.1 or later.
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
-          registry-url: https://registry.npmjs.org
+          node-version: 24
       - uses: actions/download-artifact@v4
         with:
           path: dist
-      - name: Publish platform packages
+      - name: Pick the version
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            # A hyphen, not a dot: a dotted all-digit sha with a leading zero isn't valid semver.
+            version="$(jq -r .version npm/cli/package.json)-canary-${HEAD_SHA::7}"
+            tag=canary
+          else
+            version="${GITHUB_REF_NAME#v}"
+            tag=latest
+            [[ $version != *-* ]] || tag=next
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+      - name: Publish platform packages
+        run: |
           for dir in dist/*; do
             npm=$(basename "$dir")
             os=${npm%-*}
             cpu=${npm#*-}
             exe=$(ls "$dir")
             chmod +x "$dir/$exe"
-            printf '{"name":"@prolix/cli-%s","version":"%s","os":["%s"],"cpu":["%s"],"files":["%s"]}\n' \
-              "$npm" "$version" "$os" "$cpu" "$exe" > "$dir/package.json"
-            (cd "$dir" && npm publish --access public)
+            printf '{"name":"@prolix/cli-%s","version":"%s","os":["%s"],"cpu":["%s"],"files":["%s"],"repository":{"type":"git","url":"%s"}}\n' \
+              "$npm" "$VERSION" "$os" "$cpu" "$exe" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" > "$dir/package.json"
+            (cd "$dir" && npm publish --access public --tag "$TAG")
           done
       - name: Publish @prolix/cli
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         working-directory: npm/cli
         run: |
-          version="${GITHUB_REF_NAME#v}"
           node -e '
             const fs = require("fs"), v = process.argv[1], p = JSON.parse(fs.readFileSync("package.json"));
             p.version = v;
             for (const k in p.optionalDependencies) p.optionalDependencies[k] = v;
             fs.writeFileSync("package.json", JSON.stringify(p, null, 2) + "\n");
-          ' "$version"
+          ' "$VERSION"
           cp ../../README.md .
-          npm publish --access public
+          npm publish --access public --tag "$TAG"
+      # Installs what was just published, retrying while the registry catches up.
+      - name: Check the package runs
+        run: |
+          for i in 1 2 3 4 5 6; do
+            npx --yes "@prolix/cli@$VERSION" --version && exit 0
+            sleep 10
+          done
+          exit 1
+      - name: Comment on the pull request
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: canary
+          message: |
+            ### 📦 Canary
+
+            ```sh
+            npx @prolix/cli@${{ env.VERSION }}
+            ```
+
+            In the action, set `version: ${{ env.VERSION }}`. Built from ${{ github.event.pull_request.head.sha }}.
       # Moves the major tag (v0, v1, ...) so workflows can use barclayd/prolix@v0. Prereleases leave it alone.
       - name: Move the major tag
-        if: "!contains(github.ref_name, '-')"
+        if: github.event_name == 'push' && !contains(github.ref_name, '-')
         run: |
           git tag -f "${GITHUB_REF_NAME%%.*}"
           git push -f origin "${GITHUB_REF_NAME%%.*}"

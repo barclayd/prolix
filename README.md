@@ -29,6 +29,8 @@ npm i -D @prolix/cli
 
 This works like Biome: the wrapper installs a prebuilt binary for your platform (macOS arm64/x64, Linux arm64/x64, Windows x64). If you use Rust, you can run `cargo install --path .` instead.
 
+Every pull request that changes the CLI publishes a canary under the `canary` tag (`npx @prolix/cli@canary`), and the pull request gets a comment with its exact version.
+
 ## Usage
 
 ```sh
