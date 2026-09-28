@@ -114,7 +114,7 @@ The report gives, for `value-add` and `necessary`:
 - top-1 confusions
 - every wrong decision, for error analysis
 
-`policy.json` pins a hash of the dataset and sets the floors, so changing a label or a floor is a reviewed change. Set `EVAL_BASELINE=path/to/report.json` to also fail on a drop of more than 0.05 against an earlier run. Results go to `tests/evals/results/<run>/` and to `GITHUB_STEP_SUMMARY` in CI. A full run uses about 240k input tokens.
+`policy.json` pins a hash of the dataset and sets the floors, so changing a label or a floor is a reviewed change. Set `EVAL_BASELINE=path/to/report.json` to also fail on a drop of more than 0.05 against an earlier run. Results go to `tests/evals/results/<run>/`. The `evals` workflow runs on pull requests that touch `src` or `tests/evals`, or on demand, and posts the summary to the run page. It needs a `TYPESAFE_API_KEY` repository secret. A full run uses about 240k input tokens.
 
 ## Known limits
 
