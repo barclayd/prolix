@@ -49,16 +49,51 @@ runs:
         INPUT_VERSION: ${{ inputs.version }}
         PR: ${{ github.event.pull_request.number }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        PR_AUTHOR: ${{ github.event.pull_request.user.login }}
       run: |
         set -eo pipefail
+        out="$RUNNER_TEMP/prolix"
+        api="repos/$GITHUB_REPOSITORY"
+        secrets="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/settings/secrets/actions"
+        mkdir -p "$out"
+
+        # One summary comment per pull request, found by its marker. `sticky 1` creates it if it isn't there yet.
+        sticky() {
+          local marker='<!-- prolix -->' id
+          id=$(gh api --paginate "$api/issues/$PR/comments" --jq ".[] | select(.body | startswith(\"$marker\")) | .id") || return
+          id=${id%%$'\n'*}
+          { echo "$marker"; cat "$out/summary.md"; } > "$out/comment.md"
+          if [ -n "$id" ]; then
+            gh api -X PATCH "$api/issues/comments/$id" -F "body=@$out/comment.md" > /dev/null
+          elif [ "$1" = 1 ]; then
+            gh api "$api/issues/$PR/comments" -F "body=@$out/comment.md" > /dev/null
+          fi
+        }
+
+        # Tells the pull request how to fix the key. The next run with a working key replaces it with the summary.
+        setup() {
+          [ -n "$PR" ] && [ "$INPUT_COMMENT" = true ] || return 0
+          cat > "$out/summary.md" <<EOF
+        ### prolix couldn't check this pull request
+
+        $1
+
+        1. Get a key from [typesafe.ai](https://typesafe.ai).
+        2. Save it as the \`TYPESAFE_API_KEY\` secret in [this repository's Actions secrets]($2), or run \`gh secret set TYPESAFE_API_KEY\`. An organisation secret works too, once this repository has access to it.
+        3. [Re-run the prolix job]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID).
+        EOF
+          sticky 1 || echo "::warning::prolix couldn't post its pull request comment. Does the job have pull-requests: write?"
+        }
+
         if [ -z "$TYPESAFE_API_KEY" ] && [ "$INPUT_LEVEL" != none ]; then
+          # Forks and Dependabot never get secrets, so only a pull request from this repository means the secret is missing.
+          if [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ] && [ "$PR_AUTHOR" != 'dependabot[bot]' ]; then
+            setup "No Typesafe API key reached this job, so the \`TYPESAFE_API_KEY\` secret is missing or this repository can't see it." "$secrets/new"
+          fi
           echo "::notice title=prolix skipped::No api-key. GitHub doesn't pass secrets to pull requests from forks or Dependabot."
           exit 0
         fi
-
-        out="$RUNNER_TEMP/prolix"
-        api="repos/$GITHUB_REPOSITORY"
-        mkdir -p "$out"
         args=()
         [ -z "$INPUT_LEVEL" ] || args+=("--level=$INPUT_LEVEL")
         changed=false
@@ -74,9 +109,13 @@ runs:
         run() {
           local status=0
           if [ -n "$PROLIX_BINARY" ]; then
-            "$PROLIX_BINARY" "${args[@]}" --reporter "$1" > "$out/$2" || status=$?
+            "$PROLIX_BINARY" "${args[@]}" --reporter "$1" > "$out/$2" 2> "$out/stderr" || status=$?
           else
-            npx --yes "@prolix/cli@$INPUT_VERSION" "${args[@]}" --reporter "$1" > "$out/$2" || status=$?
+            npx --yes "@prolix/cli@$INPUT_VERSION" "${args[@]}" --reporter "$1" > "$out/$2" 2> "$out/stderr" || status=$?
+          fi
+          cat "$out/stderr" >&2
+          if grep -q 'rejected TYPESAFE_API_KEY' "$out/stderr"; then
+            setup "Jev rejected the key in \`TYPESAFE_API_KEY\`, so it's wrong or has been revoked." "$secrets"
           fi
           [ "$status" -le 1 ] || exit "$status"
         }
@@ -86,19 +125,6 @@ runs:
         cat "$out/summary.md" >> "$GITHUB_STEP_SUMMARY"
         flagged=$(jq .stats.flagged "$out/report.json")
         echo "flagged=$flagged" >> "$GITHUB_OUTPUT"
-
-        # One summary comment per pull request, found by its marker. It's only created once something is flagged.
-        sticky() {
-          local marker='<!-- prolix -->' id
-          id=$(gh api --paginate "$api/issues/$PR/comments" --jq ".[] | select(.body | startswith(\"$marker\")) | .id") || return
-          id=${id%%$'\n'*}
-          { echo "$marker"; cat "$out/summary.md"; } > "$out/comment.md"
-          if [ -n "$id" ]; then
-            gh api -X PATCH "$api/issues/comments/$id" -F "body=@$out/comment.md" > /dev/null
-          elif [ "$flagged" -gt 0 ]; then
-            gh api "$api/issues/$PR/comments" -F "body=@$out/comment.md" > /dev/null
-          fi
-        }
 
         # Posts suggestions not already on the pull request, then deletes earlier ones that no longer apply.
         # ponytail: one review for all suggestions, so a single line outside the diff's hunks (an old line inside a long comment
@@ -132,7 +158,7 @@ runs:
         }
 
         if [ -n "$PR" ] && [ "$INPUT_COMMENT" = true ]; then
-          sticky || echo "::warning::prolix couldn't post its pull request comment. Does the job have pull-requests: write?"
+          sticky $((flagged > 0)) || echo "::warning::prolix couldn't post its pull request comment. Does the job have pull-requests: write?"
         fi
         if [ "$changed" = true ] && [ "$INPUT_SUGGESTIONS" = true ]; then
           # Suggestion line numbers must match the pull request's head, not GitHub's merge commit.

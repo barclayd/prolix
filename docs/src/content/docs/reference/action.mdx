@@ -28,7 +28,7 @@ jobs:
 
 | Input | Default | |
 | --- | --- | --- |
-| `api-key` | | Typesafe API key, from a secret. When it's empty the check is skipped with a notice, because GitHub doesn't pass secrets to pull requests from forks or Dependabot. |
+| `api-key` | | Typesafe API key, from a secret. When it's empty or Jev rejects it, the pull request gets a comment that links to the repository's Actions secrets. Pull requests from forks and Dependabot don't get secrets, so for those the check is skipped with a notice. |
 | `level` | `prolix.jsonc`, then `value-add` | `all`, `value-add`, `necessary` or `none`. See [Levels](/reference/levels/). |
 | `scope` | `changed` | `changed` checks comments on the lines the pull request adds. `full` checks the whole repository. Events other than pull requests always check the whole repository. |
 | `comment` | `true` | Post a summary comment when something is flagged, and keep it up to date. |
