@@ -1,4 +1,5 @@
 mod config;
+mod diff;
 mod fix;
 mod jev;
 mod lex;
@@ -17,12 +18,13 @@ use std::time::Instant;
 const USAGE: &str = "\
 Find and remove comments that don't earn their place, judged by Jev.
 
-Usage: prolix [paths...] [--fix] [--level <level>] [--reporter <reporter>]
+Usage: prolix [paths...] [--fix] [--changed[=<ref>]] [--level <level>] [--reporter <reporter>]
 
 Options:
   --fix                    Remove the flagged comments
+  --changed[=<ref>]        Only check comments on lines added since <ref>   [default: HEAD]
   --level <level>          all | value-add | necessary | none   [default: value-add]
-  --reporter <reporter>    text | json   [default: text]
+  --reporter <reporter>    text | json | markdown   [default: text]
   -h, --help               Print help
   -V, --version            Print version
 
@@ -39,6 +41,8 @@ value-add and necessary need TYPESAFE_API_KEY.
 const LEVELS: [&str; 4] = ["all", "value-add", "necessary", "none"];
 const MAX_FILE: u64 = 1 << 20;
 const MAX_COMMENT: usize = 2000;
+/// Findings listed in a Markdown report, which keeps a PR comment under GitHub's 65k-character limit.
+const MD_ROWS: usize = 200;
 
 /// Tool, compiler and licence comments are kept at every level.
 const DIRECTIVES: &[&str] = &[
@@ -171,11 +175,21 @@ fn main() {
 fn run() -> Result<i32, String> {
     let t0 = Instant::now();
     let (mut paths, mut fix, mut level, mut reporter) = (Vec::new(), false, None, None);
+    let mut changed = None;
+    // The same run with --fix, for the hint after the findings.
+    let mut again = String::new();
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
+        if !a.starts_with("--fix") && !a.starts_with("--reporter") {
+            again = again + " " + &a;
+        }
         match a.as_str() {
             "--fix" => fix = true,
-            "--level" => level = Some(args.next().ok_or("--level needs a value")?),
+            "--changed" => changed = Some("HEAD".to_string()),
+            "--level" => {
+                level = Some(args.next().ok_or("--level needs a value")?);
+                again = again + " " + level.as_deref().unwrap();
+            }
             "--reporter" => reporter = Some(args.next().ok_or("--reporter needs a value")?),
             "-h" | "--help" => {
                 print!("{USAGE}");
@@ -189,15 +203,17 @@ fn run() -> Result<i32, String> {
             _ if a.starts_with("--reporter=") => {
                 reporter = Some(a["--reporter=".len()..].to_string())
             }
+            _ if a.starts_with("--changed=") => changed = Some(a["--changed=".len()..].to_string()),
             _ if a.starts_with('-') => return Err(format!("unknown option {a}\n\n{USAGE}")),
             _ => paths.push(a),
         }
     }
-    let json = match reporter.as_deref() {
-        None | Some("text") => false,
-        Some("json") => true,
-        Some(r) => return Err(format!("unknown reporter \"{r}\" (expected text or json)")),
-    };
+    let reporter = reporter.unwrap_or_else(|| "text".into());
+    if !["text", "json", "markdown"].contains(&reporter.as_str()) {
+        return Err(format!(
+            "unknown reporter \"{reporter}\" (expected text, json or markdown)"
+        ));
+    }
     let (cfg, root) = config::load()?;
     let level = parse_level(
         level
@@ -206,53 +222,79 @@ fn run() -> Result<i32, String> {
             .unwrap_or("value-add"),
     )?;
     let threshold = cfg.threshold.unwrap_or(0.6);
-    if level == 0 {
-        println!("Level \"all\" keeps every comment; nothing to check.");
-        return Ok(0);
-    }
-    if paths.is_empty() {
-        paths.push(".".into());
-    }
-
-    let mut walk = WalkBuilder::new(&paths[0]);
-    for p in &paths[1..] {
-        walk.add(p);
-    }
-    walk.require_git(false);
-    let mut ob = OverrideBuilder::new(&root);
-    for g in &cfg.ignore {
-        ob.add(&format!("!{g}")).map_err(|e| e.to_string())?;
-    }
-    // Matched on absolute paths so globs stay relative to prolix.jsonc from any cwd, and apply to explicit paths.
-    let ov = Arc::new((
-        ob.build().map_err(|e| e.to_string())?,
-        std::env::current_dir().map_err(|e| e.to_string())?,
-    ));
-    let ignored = |ov: &(Override, PathBuf), p: &Path, dir: bool| {
-        ov.0.matched(ov.1.join(p).components().collect::<PathBuf>(), dir)
-            .is_ignore()
+    let added = match changed.as_deref() {
+        Some(base) if level > 0 => {
+            if let Some(p) = paths.iter().find(|p| !Path::new(p).exists()) {
+                return Err(format!(
+                    "{p}: no such file or directory (to compare with a ref, use --changed=<ref>)"
+                ));
+            }
+            Some(diff::added(base, &paths)?)
+        }
+        _ => None,
     };
-    let ov2 = ov.clone();
-    walk.filter_entry(move |e| !ignored(&ov2, e.path(), e.file_type().is_some_and(|t| t.is_dir())));
+    // Level "all" keeps every comment, so there is nothing to read.
+    let targets: Vec<String> = match &added {
+        Some(a) => a.keys().cloned().collect(),
+        None if level == 0 => Vec::new(),
+        None if paths.is_empty() => vec![".".into()],
+        None => paths,
+    };
     let model = jev::model();
     let scanned = AtomicUsize::new(0);
     let files = Mutex::new(Vec::new());
-    walk.build_parallel().run(|| {
-        Box::new(|entry| {
-            match entry {
-                Ok(e) if e.depth() == 0 && ignored(&ov, e.path(), false) => {}
-                Ok(e) => {
-                    if let Some(f) = read(e, level, &model, &scanned) {
-                        files.lock().unwrap().push(f);
+    if let Some((first, rest)) = targets.split_first() {
+        let mut walk = WalkBuilder::new(first);
+        for p in rest {
+            walk.add(p);
+        }
+        walk.require_git(false);
+        let mut ob = OverrideBuilder::new(&root);
+        for g in &cfg.ignore {
+            ob.add(&format!("!{g}")).map_err(|e| e.to_string())?;
+        }
+        // Matched on absolute paths so globs stay relative to prolix.jsonc from any cwd, and apply to explicit paths.
+        let ov = Arc::new((
+            ob.build().map_err(|e| e.to_string())?,
+            std::env::current_dir().map_err(|e| e.to_string())?,
+        ));
+        let ignored = |ov: &(Override, PathBuf), p: &Path, dir: bool| {
+            ov.0.matched(ov.1.join(p).components().collect::<PathBuf>(), dir)
+                .is_ignore()
+        };
+        let ov2 = ov.clone();
+        walk.filter_entry(move |e| {
+            !ignored(&ov2, e.path(), e.file_type().is_some_and(|t| t.is_dir()))
+        });
+        walk.build_parallel().run(|| {
+            Box::new(|entry| {
+                match entry {
+                    Ok(e) if e.depth() == 0 && ignored(&ov, e.path(), false) => {}
+                    Ok(e) => {
+                        if let Some(f) = read(e, level, &model, &scanned) {
+                            files.lock().unwrap().push(f);
+                        }
                     }
+                    Err(e) => eprintln!("prolix: {e}"),
                 }
-                Err(e) => eprintln!("prolix: {e}"),
-            }
-            WalkState::Continue
-        })
-    });
+                WalkState::Continue
+            })
+        });
+    }
     let mut files = files.into_inner().unwrap();
     files.sort_unstable_by(|a, b| a.path.cmp(&b.path));
+    if let Some(added) = &added {
+        for f in &mut files {
+            let lines = added
+                .get(&*f.path.to_string_lossy())
+                .map_or(&[][..], Vec::as_slice);
+            f.units.retain(|u| {
+                let end = u.line + f.src[u.start..u.end].matches('\n').count();
+                lines.iter().any(|&(a, b)| u.line <= b && a <= end)
+            });
+        }
+        files.retain(|f| !f.units.is_empty());
+    }
 
     let cache_path = if root.join("node_modules").is_dir() {
         root.join("node_modules/.cache/prolix.json")
@@ -336,7 +378,7 @@ fn run() -> Result<i32, String> {
         }
     }
     let n = scanned.into_inner();
-    if json {
+    if reporter == "json" {
         let found: usize = files.iter().map(|f| flagged(f).len()).sum();
         let round = |x: f32| (f64::from(x) * 1000.0).round() / 1000.0;
         let comments: Vec<_> = files
@@ -358,6 +400,10 @@ fn run() -> Result<i32, String> {
                         "group": u.group,
                         "confidence": u.probs.as_ref().map(|p| round(removable(p, level))),
                         "probabilities": probs,
+                        "fix": u.group.map(|_| {
+                            let (a, b, r) = fix::suggestion(&f.src, (u.start, u.end), f.lang.jsx);
+                            serde_json::json!({ "startLine": a, "endLine": b, "replacement": r })
+                        }),
                     })
                 })
             })
@@ -382,7 +428,8 @@ fn run() -> Result<i32, String> {
         return Ok(i32::from(found > 0 && !fix));
     }
 
-    let color = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+    let md = reporter == "markdown";
+    let color = !md && std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
     let paint = |code: &str, s: &str| {
         if color {
             format!("\x1b[{code}m{s}\x1b[0m")
@@ -400,7 +447,7 @@ fn run() -> Result<i32, String> {
         }
         found += spans.len();
         found_files += 1;
-        if !fix {
+        if !fix && !md {
             let _ = writeln!(
                 out,
                 "{}{}",
@@ -413,19 +460,22 @@ fn run() -> Result<i32, String> {
             .map(|u| format!("{}:{}", u.line, u.col))
             .collect();
         let w = at.iter().map(String::len).max().unwrap_or(0);
-        for (u, at) in spans.iter().zip(&at) {
+        for (i, (u, at)) in spans.iter().zip(&at).enumerate() {
             let g = u.group.unwrap();
             match groups.iter_mut().find(|(n, _)| *n == g) {
                 Some((_, c)) => *c += 1,
                 None => groups.push((g, 1)),
             }
-            if !fix {
+            let text = preview(&f.src[u.start..u.end]);
+            if md && found - spans.len() + i < MD_ROWS {
+                let at = format!("{}:{}", shown(&f.path), u.line);
+                let _ = writeln!(out, "- {} {g}: {}", code(&at), code(&text));
+            } else if !fix && !md {
                 let _ = writeln!(
                     out,
-                    "  {}  {}  {}",
+                    "  {}  {}  {text}",
                     paint("2", &format!("{at:<w$}")),
                     paint("33", &format!("{g:<18}")),
-                    preview(&f.src[u.start..u.end])
                 );
             }
         }
@@ -433,37 +483,13 @@ fn run() -> Result<i32, String> {
 
     let lvl = LEVELS[level as usize];
     let s = |n: usize| if n == 1 { "" } else { "s" };
-    if found == 0 {
-        let _ = writeln!(
-            out,
-            "{} No comments to remove (level: {lvl}).",
-            paint("32", "✓")
-        );
-    } else {
-        groups.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
-        let verb = if fix { "Removed" } else { "Found" };
-        let gap = if out.is_empty() { "" } else { "\n" };
-        let _ = writeln!(
-            out,
-            "{gap}{verb} {found} comment{} in {found_files} file{} (level: {lvl}):\n",
-            s(found),
-            s(found_files)
-        );
-        for (g, c) in &groups {
-            let what = jev::CATS
-                .iter()
-                .find(|c| c.name == *g)
-                .map_or("any comment that isn't a directive", |c| c.summary);
-            let _ = writeln!(
-                out,
-                "  {c:>5}  {}  {what}",
-                paint("33", &format!("{g:<18}"))
-            );
-        }
-        if !fix {
-            let _ = writeln!(out, "\nRun `prolix --fix` to remove them.");
-        }
-    }
+    groups.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+    let what = |g: &str| {
+        jev::CATS
+            .iter()
+            .find(|c| c.name == g)
+            .map_or("any comment that isn't a directive", |c| c.summary)
+    };
     let mut stats = format!(
         "Checked {checked} comment{} in {n} file{} in {:.2}s",
         s(checked),
@@ -478,9 +504,78 @@ fn run() -> Result<i32, String> {
             tokens / 1000
         );
     }
+
+    if md {
+        let mut m = String::new();
+        if found == 0 {
+            let _ = writeln!(m, "### ✅ prolix: no comments to remove (level: {lvl})");
+        } else {
+            let did = if fix { "removed" } else { "found" };
+            let rest = if fix { "" } else { " to remove" };
+            let _ = writeln!(
+                m,
+                "### prolix {did} {found} comment{}{rest} (level: {lvl})\n",
+                s(found)
+            );
+            m.push_str("| Count | Category | Description |\n| --: | --- | --- |\n");
+            for (g, c) in &groups {
+                let _ = writeln!(m, "| {c} | `{g}` | {} |", what(g));
+            }
+            let _ = write!(
+                m,
+                "\n<details><summary>{found} comment{} in {found_files} file{}</summary>\n\n{out}",
+                s(found),
+                s(found_files)
+            );
+            if found > MD_ROWS {
+                let _ = writeln!(m, "- …and {} more", found - MD_ROWS);
+            }
+            m.push_str("\n</details>\n");
+            if !fix {
+                let _ = writeln!(m, "\nRun `npx @prolix/cli{again} --fix` to remove them.");
+            }
+        }
+        let _ = writeln!(m, "\n<sub>{stats}</sub>");
+        print!("{m}");
+        return Ok(i32::from(found > 0 && !fix));
+    }
+
+    if found == 0 {
+        let _ = writeln!(
+            out,
+            "{} No comments to remove (level: {lvl}).",
+            paint("32", "✓")
+        );
+    } else {
+        let verb = if fix { "Removed" } else { "Found" };
+        let gap = if out.is_empty() { "" } else { "\n" };
+        let _ = writeln!(
+            out,
+            "{gap}{verb} {found} comment{} in {found_files} file{} (level: {lvl}):\n",
+            s(found),
+            s(found_files)
+        );
+        for (g, c) in &groups {
+            let _ = writeln!(
+                out,
+                "  {c:>5}  {}  {}",
+                paint("33", &format!("{g:<18}")),
+                what(g)
+            );
+        }
+        if !fix {
+            let _ = writeln!(out, "\nRun `prolix{again} --fix` to remove them.");
+        }
+    }
     let _ = writeln!(out, "{}", paint("2", &stats));
     print!("{out}");
     Ok(i32::from(found > 0 && !fix))
+}
+
+/// A Markdown code span that survives backticks in `s`.
+fn code(s: &str) -> String {
+    let fence = "`".repeat((1..).find(|&n| !s.contains(&"`".repeat(n))).unwrap());
+    format!("{fence} {s} {fence}")
 }
 
 fn parse_level(s: &str) -> Result<u8, String> {
