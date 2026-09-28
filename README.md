@@ -5,7 +5,7 @@ A fast, language-agnostic linter for comments that don't earn their place: ones 
 prolix finds every comment in a repo with a byte-level lexer (40+ languages), asks [Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev) what kind of comment each one is, and flags the ones your chosen level doesn't keep. `prolix --fix` removes them, including the lines and blank-line gaps they leave behind.
 
 ```
-$ npx prolix
+$ npx @prolix/cli
 src/client.ts
   12:3   restates-code       // create the client
   40:1   commented-out-code  // const old = retry(req);
@@ -36,8 +36,13 @@ export TYPESAFE_API_KEY=...        # from typesafe.ai
 prolix                             # check the current directory
 prolix src lib --level necessary   # check specific paths at a stricter level
 prolix --fix                       # remove everything flagged
-prolix --reporter json             # machine-readable output with Jev's probabilities
+prolix --changed=main              # only comments on lines added since the branch left main
+prolix --changed --fix             # remove flagged comments in uncommitted changes, e.g. in a pre-commit hook
+prolix --reporter json             # machine-readable output with Jev's probabilities and each fix
+prolix --reporter markdown         # a summary for a pull request comment or job summary
 ```
+
+`--changed` reads `git diff` against the merge base with the ref (default `HEAD`). It counts uncommitted edits and untracked files, and only sends Jev the comments that touch added lines. In the JSON report, each flagged comment's `fix` gives the lines to replace (`startLine` to `endLine`) and their `replacement`, which is what the GitHub Action posts as a suggestion.
 
 The walk respects `.gitignore`, `.ignore` and hidden files, and skips files over 1 MB (such as minified bundles).
 
@@ -46,6 +51,43 @@ The walk respects `.gitignore`, `.ignore` and hidden files, and skips files over
 | 0 | nothing flagged, or `--fix` succeeded |
 | 1 | comments flagged |
 | 2 | error (bad config, missing key, Jev unreachable) |
+
+## GitHub Action
+
+The action runs prolix on the lines a pull request adds. When it flags something, it posts a summary comment and a one-click suggestion to remove each comment. Later runs update the same comment (to ✅ once the pull request is clean), don't repeat suggestions and delete ones that no longer apply.
+
+```yaml
+# .github/workflows/prolix.yml
+name: prolix
+on: pull_request
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  prolix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Suggestions need the pull request's own lines and history, not GitHub's merge commit.
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - uses: barclayd/prolix@v0
+        with:
+          api-key: ${{ secrets.TYPESAFE_API_KEY }}
+```
+
+| Input | Default | |
+| --- | --- | --- |
+| `api-key` | | Typesafe API key. When it's empty the check is skipped with a notice, because GitHub doesn't pass secrets to pull requests from forks or Dependabot. |
+| `level` | `prolix.jsonc`, then `value-add` | `all`, `value-add`, `necessary` or `none` |
+| `scope` | `changed` | `full` checks the whole repository |
+| `comment` | `true` | post and update the summary comment |
+| `suggestions` | `true` | post a suggestion per flagged comment |
+| `fail-on-findings` | `false` | fail the job when anything is flagged, instead of only advising |
+| `version` | `latest` | the `@prolix/cli` version to run |
+
+The `flagged` output is the number of comments flagged. The summary also goes to the run page.
 
 ## Levels
 

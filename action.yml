@@ -1,0 +1,149 @@
+name: prolix
+description: Flags comments in a pull request that don't earn their place, judged by Jev, and suggests removing them
+author: barclayd
+branding:
+  icon: message-square
+  color: yellow
+
+inputs:
+  api-key:
+    description: Typesafe API key for Jev, from a secret. When it's empty, as on pull requests from forks, the check is skipped.
+    required: false
+  level:
+    description: all, value-add, necessary or none. Defaults to prolix.jsonc, then value-add.
+    default: ""
+  scope:
+    description: On pull requests, `changed` checks only comments on lines the pull request adds and `full` checks the whole repository. Other events always check the whole repository.
+    default: changed
+  comment:
+    description: Post a summary comment when comments are flagged, and keep it up to date on later runs.
+    default: "true"
+  suggestions:
+    description: Post each flagged comment as a review suggestion that removes it in one click. Needs scope `changed` and the pull request's head checked out with full history.
+    default: "true"
+  fail-on-findings:
+    description: Fail the job when comments are flagged.
+    default: "false"
+  version:
+    description: The @prolix/cli version to run. Set the PROLIX_BINARY environment variable to run a local build instead.
+    default: latest
+
+outputs:
+  flagged:
+    description: How many comments were flagged.
+    value: ${{ steps.prolix.outputs.flagged }}
+
+runs:
+  using: composite
+  steps:
+    - id: prolix
+      shell: bash
+      env:
+        TYPESAFE_API_KEY: ${{ inputs.api-key }}
+        GH_TOKEN: ${{ github.token }}
+        INPUT_LEVEL: ${{ inputs.level }}
+        INPUT_SCOPE: ${{ inputs.scope }}
+        INPUT_COMMENT: ${{ inputs.comment }}
+        INPUT_SUGGESTIONS: ${{ inputs.suggestions }}
+        INPUT_FAIL: ${{ inputs.fail-on-findings }}
+        INPUT_VERSION: ${{ inputs.version }}
+        PR: ${{ github.event.pull_request.number }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      run: |
+        set -eo pipefail
+        if [ -z "$TYPESAFE_API_KEY" ] && [ "$INPUT_LEVEL" != none ]; then
+          echo "::notice title=prolix skipped::No api-key. GitHub doesn't pass secrets to pull requests from forks or Dependabot."
+          exit 0
+        fi
+
+        out="$RUNNER_TEMP/prolix"
+        api="repos/$GITHUB_REPOSITORY"
+        mkdir -p "$out"
+        args=()
+        [ -z "$INPUT_LEVEL" ] || args+=("--level=$INPUT_LEVEL")
+        changed=false
+        if [ -n "$PR" ] && [ "$INPUT_SCOPE" = changed ]; then
+          base="origin/$GITHUB_BASE_REF"
+          git rev-parse -q --verify "$base^{commit}" > /dev/null ||
+            git fetch -q --no-tags --depth=1 origin "+refs/heads/$GITHUB_BASE_REF:refs/remotes/$base"
+          args+=("--changed=$base")
+          changed=true
+        fi
+
+        # Exit code 1 means comments were flagged; 2 is an error and fails the step.
+        run() {
+          local status=0
+          if [ -n "$PROLIX_BINARY" ]; then
+            "$PROLIX_BINARY" "${args[@]}" --reporter "$1" > "$out/$2" || status=$?
+          else
+            npx --yes "@prolix/cli@$INPUT_VERSION" "${args[@]}" --reporter "$1" > "$out/$2" || status=$?
+          fi
+          [ "$status" -le 1 ] || exit "$status"
+        }
+        run markdown summary.md
+        # Answered from the cache the first run wrote.
+        run json report.json
+        cat "$out/summary.md" >> "$GITHUB_STEP_SUMMARY"
+        flagged=$(jq .stats.flagged "$out/report.json")
+        echo "flagged=$flagged" >> "$GITHUB_OUTPUT"
+
+        # One summary comment per pull request, found by its marker. It's only created once something is flagged.
+        sticky() {
+          local marker='<!-- prolix -->' id
+          id=$(gh api --paginate "$api/issues/$PR/comments" --jq ".[] | select(.body | startswith(\"$marker\")) | .id") || return
+          id=${id%%$'\n'*}
+          { echo "$marker"; cat "$out/summary.md"; } > "$out/comment.md"
+          if [ -n "$id" ]; then
+            gh api -X PATCH "$api/issues/comments/$id" -F "body=@$out/comment.md" > /dev/null
+          elif [ "$flagged" -gt 0 ]; then
+            gh api "$api/issues/$PR/comments" -F "body=@$out/comment.md" > /dev/null
+          fi
+        }
+
+        # Posts suggestions not already on the pull request, then deletes earlier ones that no longer apply.
+        # ponytail: one review for all suggestions, so a single line outside the diff's hunks (an old line inside a long comment
+        # block) fails the lot with a 422. Post one review per comment if that shows up.
+        suggest() {
+          gh api --paginate "$api/pulls/$PR/comments" > "$out/old.json" || return
+          jq -n --arg m '<!-- prolix:suggestion -->' --arg sha "$HEAD_SHA" \
+            --slurpfile pages "$out/old.json" --slurpfile report "$out/report.json" '
+            def key: "\(.path):\(.line):\(.body)";
+            [$pages[][] | select(.body | startswith($m))] as $old
+            | [$report[0].comments[] | select(.group and .fix) | {
+                path,
+                line: .fix.endLine,
+                side: "RIGHT",
+                body: ("\($m)\n**prolix**: `\(.group)`. Commit the suggestion to remove it.\n\n```suggestion\n"
+                  + (if .fix.replacement == "" then "" else .fix.replacement + "\n" end) + "```")
+              } + (if .fix.startLine < .fix.endLine then {start_line: .fix.startLine, start_side: "RIGHT"} else {} end)
+            ] as $new
+            | ($old | map(key)) as $have
+            | ($new | map(key)) as $want
+            | {
+                delete: [$old[] | select(key | IN($want[]) | not) | .id],
+                review: {commit_id: $sha, event: "COMMENT", comments: [$new[] | select(key | IN($have[]) | not)][:50]}
+              }' > "$out/plan.json" || return
+          if [ "$(jq '.review.comments | length' "$out/plan.json")" -gt 0 ]; then
+            jq .review "$out/plan.json" | gh api "$api/pulls/$PR/reviews" --input - > /dev/null || return
+          fi
+          for id in $(jq '.delete[]' "$out/plan.json"); do
+            gh api -X DELETE "$api/pulls/comments/$id" > /dev/null || return
+          done
+        }
+
+        if [ -n "$PR" ] && [ "$INPUT_COMMENT" = true ]; then
+          sticky || echo "::warning::prolix couldn't post its pull request comment. Does the job have pull-requests: write?"
+        fi
+        if [ "$changed" = true ] && [ "$INPUT_SUGGESTIONS" = true ]; then
+          # Suggestion line numbers must match the pull request's head, not GitHub's merge commit.
+          if [ "$(git rev-parse HEAD)" != "$HEAD_SHA" ] || [ "$(git rev-parse --is-shallow-repository)" = true ]; then
+            echo "::warning::prolix suggests fixes only when actions/checkout has ref set to the pull request's head sha and fetch-depth: 0."
+          else
+            suggest || echo "::warning::prolix couldn't post its review suggestions. Does the job have pull-requests: write?"
+          fi
+        fi
+
+        if [ "$INPUT_FAIL" = true ] && [ "$flagged" -gt 0 ]; then
+          echo "::error::prolix flagged $flagged comments"
+          exit 1
+        fi

@@ -58,6 +58,21 @@ pub fn apply(src: &str, spans: &[(usize, usize)], jsx: bool) -> String {
     out
 }
 
+/// The lines that removing one comment changes, as 1-based `(first, last, replacement)`, for a review suggestion.
+// ponytail: re-applies the fix to the whole file per comment, O(file × flagged); fine for PR-sized output.
+pub fn suggestion(src: &str, span: (usize, usize), jsx: bool) -> (usize, usize, String) {
+    let fixed = apply(src, &[span], jsx);
+    let (a, b): (Vec<_>, Vec<_>) = (src.lines().collect(), fixed.lines().collect());
+    let pre = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
+    let suf = a
+        .iter()
+        .rev()
+        .zip(b.iter().rev())
+        .take(a.len().min(b.len()) - pre);
+    let suf = suf.take_while(|(x, y)| x == y).count();
+    (pre + 1, a.len() - suf, b[pre..b.len() - suf].join("\n"))
+}
+
 /// Widens `{/* ... */}` to include its braces when that is a whole line or a JSX child.
 fn braces(b: &[u8], s: usize, e: usize) -> (usize, usize) {
     let a = s - ws_len_back(b, s);
@@ -135,6 +150,18 @@ mod tests {
         assert_eq!(fix("return/* x */v", &["/* x */"], false), "return v");
         assert_eq!(fix("a\r\n// x\r\nb\r\n", &["// x"], false), "a\r\nb\r\n");
         assert_eq!(fix("a\n// x\n// y\nb\n", &["// x\n// y"], false), "a\nb\n");
+    }
+
+    #[test]
+    fn suggestions() {
+        let at = |src: &str, p: &str| {
+            let s = src.find(p).unwrap();
+            super::suggestion(src, (s, s + p.len()), false)
+        };
+        assert_eq!(at("a\n  // x\nb\n", "// x"), (2, 2, "".into()));
+        assert_eq!(at("a(); // x\nb\n", "// x"), (1, 1, "a();".into()));
+        assert_eq!(at("a\n\n// x\n\nb\n", "// x"), (3, 4, "".into()));
+        assert_eq!(at("a\n// x\n// y\nb", "// x\n// y"), (2, 3, "".into()));
     }
 
     #[test]
