@@ -1,0 +1,112 @@
+---
+title: Set up
+description: Add prolix to a repo so every pull request has the comments it adds reviewed, with one-click suggestions to remove the ones that don't earn their place.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+<Aside type="tip" title="Hand this page to your agent">
+Paste this into Claude Code, Codex, Cursor or any coding agent that works in your repo:
+
+```text wrap
+Read https://prolix.barclaysd.workers.dev/setup.md, then set up prolix in this repo by following it. Run the commands yourself, open a pull request, and tell me when I need to add the TYPESAFE_API_KEY secret.
+```
+</Aside>
+
+When this is set up, prolix runs on every pull request. It checks only the lines the pull request adds, so it won't flag the comments already in the repo. It posts a summary comment and a suggestion to remove each flagged comment, and updates the same comment on later pushes. To clear the comments already in a repo, see [Clean up an existing repo](/adopt/).
+
+## Steps
+
+<Steps>
+
+1. **Add the workflow.** Create `.github/workflows/prolix.yml`:
+
+   ```yaml title=".github/workflows/prolix.yml"
+   name: prolix
+   on: pull_request
+   permissions:
+     contents: read
+     pull-requests: write
+   jobs:
+     prolix:
+       runs-on: ubuntu-latest
+       steps:
+         - uses: actions/checkout@v4
+           with:
+             ref: ${{ github.event.pull_request.head.sha }}
+             fetch-depth: 0
+         - uses: barclayd/prolix@v0
+           with:
+             api-key: ${{ secrets.TYPESAFE_API_KEY }}
+   ```
+
+   Keep `ref` and `fetch-depth: 0`. They check out the pull request's own commits rather than GitHub's merge commit, which is how suggestions land on the right lines.
+
+2. **Add `prolix.jsonc`** at the repository root:
+
+   ```jsonc title="prolix.jsonc"
+   {
+     "$schema": "https://unpkg.com/@prolix/cli/configuration_schema.json",
+     "level": "value-add"
+   }
+   ```
+
+   If the repo commits generated or vendored code that `.gitignore` doesn't cover, such as generated API clients or `vendor/`, add globs for it to `"ignore"`. See [Configuration](/reference/configuration/).
+
+3. **In a JavaScript or TypeScript repo, add the CLI** as a dev dependency with the repo's package manager, so everyone runs the same version:
+
+   | Package manager | Command |
+   | --- | --- |
+   | npm | `npm i -D @prolix/cli` |
+   | pnpm | `pnpm add -D @prolix/cli` |
+   | bun | `bun add -d @prolix/cli` |
+   | yarn | `yarn add -D @prolix/cli` |
+
+   Then add a script that checks what the branch adds:
+
+   ```json title="package.json"
+   "scripts": {
+     "lint:comments": "prolix --changed=origin/main"
+   }
+   ```
+
+   Use the repo's default branch in place of `main`. Other repos can skip this step and run `npx @prolix/cli`.
+
+4. **Add the API key secret.** prolix asks [Jev](https://typesafe.ai) which comments to keep, so it needs a Typesafe API key from [typesafe.ai](https://typesafe.ai). Add it as a repository secret:
+
+   ```sh
+   gh secret set TYPESAFE_API_KEY
+   ```
+
+   `gh` prompts for the value, so the key never appears in your shell history. Without the secret the check is skipped with a notice, as it is on pull requests from forks and Dependabot, which don't get secrets.
+
+   **Agents:** don't ask for the key or handle it yourself. Tell the user to run `gh secret set TYPESAFE_API_KEY`. If `gh secret list` already shows it, skip this step.
+
+5. **Open a pull request** with these changes. Once the secret is set, the prolix check runs on it, and on every pull request after it.
+
+</Steps>
+
+## Check it works
+
+If `TYPESAFE_API_KEY` is set in your shell, run prolix on what the branch adds:
+
+```sh
+npx @prolix/cli --changed=origin/main
+```
+
+It exits 0 when nothing is flagged and 1 when something is. To see it flag something, push a commit that adds `// increment the counter` above a line like `count++`. The pull request gets a comment and a suggestion that removes it.
+
+## Options
+
+- Make the check block merging with `fail-on-findings: true`. By default it only advises.
+- Keep fewer comments with `level: necessary`, which also removes TODOs and comments that only summarise what code does.
+- Check the whole repository rather than the lines each pull request adds with `scope: full`.
+
+See the [GitHub Action reference](/reference/action/) for every input.
+
+## Done when
+
+- `.github/workflows/prolix.yml` matches step 1, including `pull-requests: write`, `ref` and `fetch-depth: 0`
+- `prolix.jsonc` is at the repository root
+- the `TYPESAFE_API_KEY` repository secret exists, or the user has been told to add it
+- a pull request with these changes is open

@@ -1,0 +1,41 @@
+---
+title: Configuration
+description: prolix.jsonc settings, environment variables and the answer cache.
+---
+
+## prolix.jsonc
+
+prolix reads `prolix.jsonc`, or `prolix.json`, from the current directory or the nearest parent that has one. Every setting is optional.
+
+```jsonc title="prolix.jsonc"
+{
+  "$schema": "https://unpkg.com/@prolix/cli/configuration_schema.json",
+  "level": "value-add",
+  // How sure Jev must be (0-1) that a comment is removable before flagging it.
+  "threshold": 0.6,
+  // Globs relative to this file, on top of .gitignore.
+  "ignore": ["vendor/**", "**/*.generated.ts"]
+}
+```
+
+| Setting | Default | |
+| --- | --- | --- |
+| `level` | `value-add` | `all`, `value-add`, `necessary` or `none`. See [Levels](/reference/levels/). `--level` and the action's `level` input override it. |
+| `threshold` | `0.6` | How sure Jev must be, from 0 to 1, that a comment is removable before it's flagged. Raise it to flag less. |
+| `ignore` | `[]` | Globs to skip, relative to the file, on top of `.gitignore` and `.ignore`. |
+
+Unknown settings are an error, so a typo fails loudly rather than being ignored. With `@prolix/cli` installed, `"$schema": "./node_modules/@prolix/cli/configuration_schema.json"` gives editors the schema offline.
+
+## Environment variables
+
+| Variable | Default | |
+| --- | --- | --- |
+| `TYPESAFE_API_KEY` | | Needed for `value-add` and `necessary`. Get one from [typesafe.ai](https://typesafe.ai). |
+| `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | The Jev API. |
+| `TYPESAFE_DEFAULT_MODEL` | `jev-latest` | The Jev model. |
+
+## Cache
+
+Jev's answers are cached by comment, surrounding code, language and model in `node_modules/.cache/prolix.json`, or in `.prolixcache` when there is no `node_modules`. Re-runs only ask about new or changed comments, and switching levels or thresholds needs no new calls.
+
+Add `.prolixcache` to `.gitignore` in repos without `node_modules`. The cache only grows, so delete it to reset.

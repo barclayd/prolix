@@ -4,6 +4,8 @@ A fast, language-agnostic linter for comments that don't earn their place: ones 
 
 prolix finds every comment in a repo with a byte-level lexer (40+ languages), asks [Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev) what kind of comment each one is, and flags the ones your chosen level doesn't keep. `prolix --fix` removes them, including the lines and blank-line gaps they leave behind.
 
+**[Docs](https://prolix.barclaysd.workers.dev)**, with prompts to hand to your coding agent for [setting it up](https://prolix.barclaysd.workers.dev/setup/) and [cleaning up an existing repo](https://prolix.barclaysd.workers.dev/adopt/).
+
 ```
 $ npx @prolix/cli
 src/client.ts
@@ -18,7 +20,7 @@ Found 3 comments in 1 file (level: value-add):
       1  change-note         narrates an edit instead of the code as it is
 
 Run `prolix --fix` to remove them.
-Checked 214 comments in 38 files in 0.61s · Jev: 214 asked, 0 cached, 41k tokens
+Checked 214 comments in 38 files in 0.61s · Jev: 214 asked, 0 cached, 228k tokens
 ```
 
 ## Install
