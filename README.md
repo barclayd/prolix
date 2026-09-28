@@ -31,6 +31,8 @@ This works like Biome: the wrapper installs a prebuilt binary for your platform 
 
 Every pull request that changes the CLI publishes a canary under the `canary` tag (`npx @prolix/cli@canary`), and the pull request gets a comment with its exact version.
 
+Releases use [changesets](https://github.com/changesets/changesets). Run `npx changeset` in a pull request to describe a change. When it's merged, a Version PR collects the pending changesets. Merging that PR publishes the new version to npm and creates a GitHub release.
+
 ## Usage
 
 ```sh

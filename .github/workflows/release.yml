@@ -2,7 +2,7 @@ name: release
 
 on:
   push:
-    tags: ["v*.*.*"]
+    branches: [main]
   # Pull requests publish a canary, which also tests the npm packages before a release.
   pull_request:
     paths: ["src/**", "npm/**", "Cargo.*", ".github/workflows/release.yml"]
@@ -12,7 +12,39 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Keeps a Version PR open while changesets are pending. Merging it leaves npm/cli at a version npm hasn't seen, which
+  # the jobs below then release.
+  changesets:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      release: ${{ steps.check.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      # ponytail: `npm ci` rejects the lockfile npm 11 writes, because @manypkg/find-root hoists @types/node 12 under an
+      # optional peer that wants 18. Switch back to `npm ci` once npm validates optional peers the way it installs them.
+      - run: npm install --no-audit --no-fund
+      - id: changesets
+        uses: changesets/action@v1
+        with:
+          version: npm run version-packages
+          title: "chore: version packages"
+          commit: "chore: version packages"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - id: check
+        if: steps.changesets.outputs.hasChangesets == 'false'
+        run: npm view "@prolix/cli@$(jq -r .version npm/cli/package.json)" version || echo release=true >> "$GITHUB_OUTPUT"
+
   build:
+    needs: changesets
+    if: ${{ !cancelled() && (github.event_name == 'pull_request' || needs.changesets.outputs.release == 'true') }}
     strategy:
       matrix:
         include:
@@ -41,7 +73,7 @@ jobs:
   # Pull requests from forks get no OIDC token, so they only build.
   publish:
     needs: build
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    if: ${{ !cancelled() && needs.build.result == 'success' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -62,12 +94,12 @@ jobs:
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
+          version=$(jq -r .version npm/cli/package.json)
           if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
             # A hyphen, not a dot: a dotted all-digit sha with a leading zero isn't valid semver.
-            version="$(jq -r .version npm/cli/package.json)-canary-${HEAD_SHA::7}"
+            version="$version-canary-${HEAD_SHA::7}"
             tag=canary
           else
-            version="${GITHUB_REF_NAME#v}"
             tag=latest
             [[ $version != *-* ]] || tag=next
           fi
@@ -91,14 +123,16 @@ jobs:
           node -e '
             const fs = require("fs"), v = process.argv[1], p = JSON.parse(fs.readFileSync("package.json"));
             p.version = v;
-            for (const k in p.optionalDependencies) p.optionalDependencies[k] = v;
+            p.optionalDependencies = Object.fromEntries(fs.readdirSync("../../dist").map((d) => [`@prolix/cli-${d}`, v]));
             fs.writeFileSync("package.json", JSON.stringify(p, null, 2) + "\n");
           ' "$VERSION"
           cp ../../README.md .
           npm publish --access public --tag "$TAG"
       # Installs what was just published. New versions can take several minutes to show up on the registry.
       # Each try gets a fresh cache: npx would otherwise keep reusing an install made before a platform package showed up.
+      # It runs outside the checkout, where npx would find the uninstalled npm/cli workspace instead.
       - name: Check the package runs
+        working-directory: ${{ runner.temp }}
         run: |
           for i in $(seq 30); do
             npm_config_cache=$(mktemp -d) npx --yes "@prolix/cli@$VERSION" --version && exit 0
@@ -118,9 +152,18 @@ jobs:
             ```
 
             In the action, set `version: ${{ env.VERSION }}`. Built from ${{ github.event.pull_request.head.sha }}.
-      # Moves the major tag (v0, v1, ...) so workflows can use barclayd/prolix@v0. Prereleases leave it alone.
-      - name: Move the major tag
-        if: github.event_name == 'push' && !contains(github.ref_name, '-')
+      # Tags the release with its changelog, and moves the major tag (v0, v1, ...) so workflows can use
+      # barclayd/prolix@v0. Prereleases leave the major tag alone.
+      - name: Release on GitHub
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          git tag -f "${GITHUB_REF_NAME%%.*}"
-          git push -f origin "${GITHUB_REF_NAME%%.*}"
+          awk -v v="## $VERSION" '$0 == v {on=1; next} /^## / {on=0} on' npm/cli/CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if [ "$TAG" = latest ]; then
+            gh release create "v$VERSION" --target "$GITHUB_SHA" --notes-file "$RUNNER_TEMP/notes.md"
+            git tag -f "v${VERSION%%.*}" "$GITHUB_SHA"
+            git push -f origin "v${VERSION%%.*}"
+          else
+            gh release create "v$VERSION" --target "$GITHUB_SHA" --notes-file "$RUNNER_TEMP/notes.md" --prerelease
+          fi
