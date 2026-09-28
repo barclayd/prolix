@@ -27,7 +27,7 @@ The GitHub Action only checks the lines a pull request adds, so turning it on ne
    npx @prolix/cli --level none --reporter json | jq .stats
    ```
 
-   Jev reads about 200 input tokens per comment. Re-runs only ask about new or changed comments, because answers are cached.
+   Jev reads about 1,000 input tokens per comment, since it sees the code around each one. Re-runs only ask about new or changed comments, because answers are cached.
 
 3. **Remove the backlog at `value-add`.** It removes only comments that restate the code, disabled code, banners, change notes and signature-only docs:
 

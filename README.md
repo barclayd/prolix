@@ -20,7 +20,7 @@ Found 3 comments in 1 file (level: value-add):
       1  change-note         narrates an edit instead of the code as it is
 
 Run `prolix --fix` to remove them.
-Checked 214 comments in 38 files in 0.61s · Jev: 214 asked, 0 cached, 41k tokens
+Checked 214 comments in 38 files in 0.61s · Jev: 214 asked, 0 cached, 228k tokens
 ```
 
 ## Install
