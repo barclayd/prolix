@@ -1,0 +1,28 @@
+{
+  "name": "@prolix/cli",
+  "version": "0.1.0",
+  "description": "Finds and removes comments that don't earn their place, judged by Jev",
+  "bin": {
+    "prolix": "bin/prolix"
+  },
+  "files": [
+    "bin",
+    "configuration_schema.json"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "lint",
+    "comments",
+    "jev",
+    "cli"
+  ],
+  "optionalDependencies": {
+    "@prolix/cli-darwin-arm64": "0.1.0",
+    "@prolix/cli-darwin-x64": "0.1.0",
+    "@prolix/cli-linux-arm64": "0.1.0",
+    "@prolix/cli-linux-x64": "0.1.0",
+    "@prolix/cli-win32-x64": "0.1.0"
+  }
+}

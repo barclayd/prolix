@@ -1,0 +1,4 @@
+{
+  "$schema": "./npm/cli/configuration_schema.json",
+  "level": "value-add"
+}

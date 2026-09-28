@@ -1,0 +1,20 @@
+#!/usr/bin/env node
+const { spawnSync } = require("node:child_process");
+
+const exe = process.platform === "win32" ? "prolix.exe" : "prolix";
+const pkg = `@prolix/cli-${process.platform}-${process.arch}`;
+let bin = process.env.PROLIX_BINARY;
+if (!bin) {
+  try {
+    bin = require.resolve(`${pkg}/${exe}`);
+  } catch {
+    console.error(`prolix: no binary for ${process.platform}-${process.arch}; is ${pkg} installed?`);
+    process.exit(2);
+  }
+}
+const r = spawnSync(bin, process.argv.slice(2), { stdio: "inherit" });
+if (r.error) {
+  console.error(`prolix: ${r.error.message}`);
+  process.exit(2);
+}
+process.exit(r.status ?? 2);
