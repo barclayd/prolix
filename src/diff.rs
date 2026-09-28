@@ -108,3 +108,11 @@ diff --git old.rs old.rs
         assert_eq!(a.len(), 2);
     }
 }
+
+// Updated to use the new parser
+fn _demo() -> usize {
+    // set x to one
+    let x = 1;
+    // println!("{x}");
+    x // return x
+}
