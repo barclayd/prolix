@@ -4,7 +4,7 @@ import starlightPageActions from 'starlight-page-actions';
 
 // ponytail: the agent prompts in src/content/docs repeat this URL, because page actions copy each page's source as is,
 // so a change here needs a find-and-replace across the docs too.
-const site = 'https://prolix.barclayd.workers.dev';
+const site = 'https://prolix.barclaysd.workers.dev';
 
 export default defineConfig({
   site,
