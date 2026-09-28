@@ -28,6 +28,16 @@ pub struct Lang {
     pub kind: Kind,
 }
 
+impl Lang {
+    /// Configuration, where comments label sections and keep switched-off settings to hand.
+    pub fn config(&self) -> bool {
+        matches!(
+            self.name,
+            "YAML" | "TOML" | "HCL" | "JSONC" | "Dockerfile" | "Makefile" | "CMake"
+        )
+    }
+}
+
 pub struct Raw {
     pub start: usize,
     pub end: usize,
@@ -368,12 +378,16 @@ pub fn scan(src: &[u8], lang: &Lang, base: usize, out: &mut Vec<Raw>) {
     let mut depth = 0u32;
     let mut tmpl: Vec<u32> = Vec::new();
     let mut heredoc: Option<(usize, usize)> = None;
+    let mut yblock: Option<usize> = None;
     while i < n {
         let c = src[i];
         if c == b'\n' {
             i += 1;
             if let Some((s, e)) = heredoc.take() {
                 i = heredoc_end(src, i, &src[s..e]);
+            }
+            if let Some(parent) = yblock.take() {
+                i = yaml_block_end(src, i, parent, base, out);
             }
             continue;
         }
@@ -482,6 +496,25 @@ pub fn scan(src: &[u8], lang: &Lang, base: usize, out: &mut Vec<Raw>) {
                     e
                 }),
                 (Kind::Heredoc, b'<') => heredoc_start(src, i, &mut heredoc),
+                // `key: |`, `- >-` or `run: |2`: a block scalar, whose lines are text however they look.
+                (Kind::Yaml, b'|' | b'>')
+                    if b":-".contains(&p) && src[i - 1].is_ascii_whitespace() =>
+                {
+                    let j = i
+                        + 1
+                        + src[i + 1..]
+                            .iter()
+                            .take_while(|b| b"-+0123456789".contains(b))
+                            .count();
+                    if src.get(j).is_none_or(u8::is_ascii_whitespace) {
+                        let ls = src[..i]
+                            .iter()
+                            .rposition(|&b| b == b'\n')
+                            .map_or(0, |k| k + 1);
+                        yblock = Some(src[ls..].iter().take_while(|&&b| b == b' ').count());
+                    }
+                    j
+                }
                 _ => i + 1,
             };
         }
@@ -707,6 +740,37 @@ fn heredoc_end(s: &[u8], mut j: usize, tag: &[u8]) -> usize {
     s.len()
 }
 
+/// Skips a block scalar opened on a line indented `parent` spaces. Its first non-blank line sets the indent the rest
+/// keep, and blank lines in between belong to it. Its text isn't read as code, but a line of `# words` is taken for a
+/// comment in an embedded script. `## Heading` stays Markdown.
+fn yaml_block_end(s: &[u8], mut j: usize, parent: usize, base: usize, out: &mut Vec<Raw>) -> usize {
+    let mut indent = None;
+    while j < s.len() {
+        let e = s[j..]
+            .iter()
+            .position(|&b| b == b'\n')
+            .map_or(s.len(), |k| j + k);
+        let line = &s[j..e];
+        let ind = line.iter().take_while(|&&b| b == b' ').count();
+        let t = line[ind..].trim_ascii_end();
+        if !t.is_empty() {
+            let want = *indent.get_or_insert(ind);
+            if ind <= parent || ind < want {
+                return j;
+            }
+            if t.starts_with(b"# ") || t == b"#" {
+                out.push(Raw {
+                    start: base + j + ind,
+                    end: base + j + ind + t.len(),
+                    line: true,
+                });
+            }
+        }
+        j = e + 1;
+    }
+    s.len()
+}
+
 fn markup(s: &[u8], lang: &Lang, base: usize, out: &mut Vec<Raw>) {
     let mut i = 0;
     if lang.name == "Astro" && s.starts_with(b"---") {
@@ -798,6 +862,11 @@ x = y // yes4
         assert_eq!(
             comments("a: b#c # yes\nd: don't # yes2\n", "a.yml"),
             ["# yes", "# yes2"]
+        );
+        let y = "a: |\n  ### no\n  x # no\n\n  # yes\n# yes2\nb: >- # yes3\n  ## no\nsteps:\n  - run: |\n      echo # no\n  # yes4\nc: x | y # yes5\n";
+        assert_eq!(
+            comments(y, "a.yml"),
+            ["# yes", "# yes2", "# yes3", "# yes4", "# yes5"]
         );
     }
 

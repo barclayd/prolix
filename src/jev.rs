@@ -15,6 +15,14 @@ pub struct Cat {
     pub examples: &'static [&'static str],
 }
 
+/// The level that removes `cat`. Configuration keeps section labels and switched-off settings until `necessary`.
+pub fn level(cat: &Cat, config: bool) -> u8 {
+    match cat.name {
+        "restates-code" | "decorative" | "commented-out-code" if config => 2,
+        _ => cat.level,
+    }
+}
+
 pub const CATS: [Cat; 11] = [
     Cat {
         name: "restates-code",
