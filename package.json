@@ -1,0 +1,13 @@
+{
+  "private": true,
+  "workspaces": [
+    "npm/cli"
+  ],
+  "scripts": {
+    "version-packages": "changeset version && node npm/sync-cargo.mjs"
+  },
+  "devDependencies": {
+    "@changesets/changelog-github": "^0.5.1",
+    "@changesets/cli": "^2.29.7"
+  }
+}

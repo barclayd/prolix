@@ -1,6 +1,6 @@
 {
   "name": "@prolix/cli",
-  "version": "0.1.0",
+  "version": "0.0.0",
   "description": "Finds and removes comments that don't earn their place, judged by Jev",
   "repository": {
     "type": "git",
@@ -21,12 +21,5 @@
     "comments",
     "jev",
     "cli"
-  ],
-  "optionalDependencies": {
-    "@prolix/cli-darwin-arm64": "0.1.0",
-    "@prolix/cli-darwin-x64": "0.1.0",
-    "@prolix/cli-linux-arm64": "0.1.0",
-    "@prolix/cli-linux-x64": "0.1.0",
-    "@prolix/cli-win32-x64": "0.1.0"
-  }
+  ]
 }
