@@ -134,7 +134,6 @@ Add `prolix-ignore` to any comment to keep it.
 
 ```jsonc
 {
-  "$schema": "./node_modules/@prolix/cli/configuration_schema.json",
   "level": "value-add",
   // How sure Jev must be (0-1) that a comment is removable before flagging it.
   "threshold": 0.6,

@@ -46,12 +46,12 @@ When this is set up, prolix runs on every pull request. It checks only the lines
 
    ```jsonc title="prolix.jsonc"
    {
-     "$schema": "https://unpkg.com/@prolix/cli/configuration_schema.json",
-     "level": "value-add"
+     "level": "necessary",
+     "ignore": ["src/types/env.d.ts"]
    }
    ```
 
-   If the repo commits generated or vendored code that `.gitignore` doesn't cover, such as generated API clients or `vendor/`, add globs for it to `"ignore"`. See [Configuration](/reference/configuration/).
+   `"ignore"` takes globs for generated or vendored code that `.gitignore` doesn't cover, such as a generated `env.d.ts`, API clients or `vendor/`. Leave it out if there's none. See [Configuration](/reference/configuration/).
 
 3. **In a JavaScript or TypeScript repo, add the CLI** as a dev dependency with the repo's package manager, so everyone runs the same version:
 
@@ -99,7 +99,7 @@ It exits 0 when nothing is flagged and 1 when something is. To see it flag somet
 ## Options
 
 - Make the check block merging with `fail-on-findings: true`. By default it only advises.
-- Keep fewer comments with `level: necessary`, which also removes TODOs and comments that only summarise what code does.
+- Keep more comments with `"level": "value-add"`, which leaves TODOs and comments that only summarise what code does alone.
 - Check the whole repository rather than the lines each pull request adds with `scope: full`.
 
 See the [GitHub Action reference](/reference/action/) for every input.
