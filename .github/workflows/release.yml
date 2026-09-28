@@ -1,0 +1,73 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - { target: aarch64-apple-darwin, os: macos-latest, npm: darwin-arm64 }
+          - { target: x86_64-apple-darwin, os: macos-latest, npm: darwin-x64 }
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest, npm: linux-x64 }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm, npm: linux-arm64 }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest, npm: win32-x64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: cargo test
+        if: "!contains(matrix.target, 'x86_64-apple')"
+      - run: cargo build --release --target ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.npm }}
+          path: target/${{ matrix.target }}/release/prolix${{ contains(matrix.target, 'windows') && '.exe' || '' }}
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Publish platform packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          for dir in dist/*; do
+            npm=$(basename "$dir")
+            os=${npm%-*}
+            cpu=${npm#*-}
+            exe=$(ls "$dir")
+            chmod +x "$dir/$exe"
+            printf '{"name":"@prolix/cli-%s","version":"%s","os":["%s"],"cpu":["%s"],"files":["%s"]}\n' \
+              "$npm" "$version" "$os" "$cpu" "$exe" > "$dir/package.json"
+            (cd "$dir" && npm publish --access public)
+          done
+      - name: Publish @prolix/cli
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        working-directory: npm/cli
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          node -e '
+            const fs = require("fs"), v = process.argv[1], p = JSON.parse(fs.readFileSync("package.json"));
+            p.version = v;
+            for (const k in p.optionalDependencies) p.optionalDependencies[k] = v;
+            fs.writeFileSync("package.json", JSON.stringify(p, null, 2) + "\n");
+          ' "$version"
+          cp ../../README.md .
+          npm publish --access public

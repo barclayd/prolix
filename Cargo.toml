@@ -1,0 +1,18 @@
+[package]
+name = "prolix"
+version = "0.1.0"
+edition = "2021"
+description = "Ultrafast linter that removes comments that don't add value, powered by Jev"
+
+[dependencies]
+ignore = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = { version = "2", features = ["json"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+strip = true
+panic = "abort"
