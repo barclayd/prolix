@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "datasetHash": "ebd9aed5762ddfb7",
+  "floors": {
+    "value-add": { "precision": 0.97, "recall": 0.9 },
+    "necessary": { "precision": 0.97, "recall": 0.9 }
+  },
+  "maximumFlipRate": 0.05,
+  "maximumBaselineDrop": 0.05,
+  "reference": {
+    "commit": "962ac35",
+    "model": "jev-latest",
+    "repeat": 3,
+    "note": "Provisional floors for the 15-fixture development set, set below the first baseline (precision 1.000 at both levels; recall 0.991 value-add, 1.000 necessary). Changing labels or floors needs review."
+  }
+}

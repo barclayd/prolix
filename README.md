@@ -36,6 +36,7 @@ export TYPESAFE_API_KEY=...        # from typesafe.ai
 prolix                             # check the current directory
 prolix src lib --level necessary   # check specific paths at a stricter level
 prolix --fix                       # remove everything flagged
+prolix --reporter json             # machine-readable output with Jev's probabilities
 ```
 
 The walk respects `.gitignore`, `.ignore` and hidden files, and skips files over 1 MB (such as minified bundles).
@@ -85,6 +86,35 @@ Tool and compiler directives are never touched. These include `eslint-disable`, 
 Each comment is sent with a few lines of surrounding code. prolix batches up to 32 comments per request and sends up to 16 requests in parallel. It retries rate limits and 5xx responses with backoff.
 
 Answers are cached by comment, context, language and model in `node_modules/.cache/prolix.json`, or in `.prolixcache` when there is no `node_modules`. Re-runs only ask about new or changed comments, and switching levels needs no new calls.
+
+## Evals
+
+`tests/evals` measures Jev's judgements end to end. It runs the release binary against 15 fixtures (TypeScript, TSX, Rust, Python, Go, Java, C, Ruby, shell, SQL, CSS and YAML). Every comment in them is labelled in `cases.json` with the categories a careful reviewer would accept. The fixtures cover every category, plus these harder cases:
+
+- warnings dressed as banners
+- TODOs that also explain why
+- prose that quotes code
+- prompt-injection comments
+- directives, which must never reach Jev
+
+```sh
+export TYPESAFE_API_KEY=...
+cargo test --release --test evals -- --ignored --nocapture
+```
+
+Each fixture is judged `EVAL_REPEAT` times (default 3) from an empty cache.
+
+The report gives, for `value-add` and `necessary`:
+
+- removal precision, the gate, because deleting a useful comment is the costly mistake
+- recall
+- flip rate between repeats
+- a threshold sweep
+- per-category accuracy
+- top-1 confusions
+- every wrong decision, for error analysis
+
+`policy.json` pins a hash of the dataset and sets the floors, so changing a label or a floor is a reviewed change. Set `EVAL_BASELINE=path/to/report.json` to also fail on a drop of more than 0.05 against an earlier run. Results go to `tests/evals/results/<run>/` and to `GITHUB_STEP_SUMMARY` in CI. A full run uses about 240k input tokens.
 
 ## Known limits
 
