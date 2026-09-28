@@ -100,7 +100,15 @@ The `flagged` output is the number of comments flagged. The summary also goes to
 | `necessary` | explains-why, warning, api-doc, reference | the above, plus todo and clarifies |
 | `none` | tool directives and licences only | every other comment (no Jev call) |
 
-Tool and compiler directives are never touched. These include `eslint-disable`, `@ts-expect-error`, `biome-ignore`, `prettier-ignore`, `# noqa`, `# type: ignore`, `//go:build`, shebangs, `/*!` licence headers and `/// <reference>`. Add `prolix-ignore` to any comment to keep it.
+Tool and compiler directives are never touched. prolix recognises them by shape rather than by a list of tool names, so a linter it has never heard of is still respected:
+
+- a switch word joined to a name or followed by a rule: `eslint-disable-next-line`, `react-doctor-disable-line`, `biome-ignore`, `# hadolint ignore=DL3008`, `/* c8 ignore next */`
+- `no…` markers and `tool:setting` tokens: `# noqa: E501`, `// NOLINTNEXTLINE`, `# rubocop:disable`, `//go:build`, `// gitleaks:allow`
+- tags and settings: `@ts-expect-error`, `$FlowFixMe`, `# shellcheck source=lib.sh`, `# syntax=docker/dockerfile:1`, `/* webpackChunkName: "x" */`
+- version pins beside a hash, as in `uses: actions/checkout@<sha> # v4.1.1`
+- shebangs, pragmas, regions, `/*!` licence headers, `@generated` markers and `/// <reference>`
+
+Add `prolix-ignore` to any comment to keep it.
 
 ## Configuration
 

@@ -11,6 +11,9 @@
 #[allow(dead_code)]
 #[path = "../../src/jev.rs"]
 mod jev;
+#[allow(dead_code)]
+#[path = "../../src/lex.rs"]
+mod lex;
 
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
@@ -77,14 +80,15 @@ fn read(path: impl AsRef<Path>) -> String {
     std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
-fn expect(cats: &[String], level: u8) -> Expect {
+fn expect(cats: &[String], level: u8, config: bool) -> Expect {
     let removed = cats
         .iter()
         .filter(|c| {
             let cat = jev::CATS.iter().find(|k| k.name == c.as_str());
-            cat.unwrap_or_else(|| panic!("unknown category {c:?} in cases.json"))
-                .level
-                <= level
+            jev::level(
+                cat.unwrap_or_else(|| panic!("unknown category {c:?} in cases.json")),
+                config,
+            ) <= level
         })
         .count();
     match removed {
@@ -104,6 +108,7 @@ fn grade(
     out: &mut Vec<Decision>,
 ) -> Vec<String> {
     let mut problems = Vec::new();
+    let config = lex::lang_for(Path::new(file)).is_some_and(|l| l.config());
     for (li, report) in reports.iter().enumerate() {
         let comments = report["comments"].as_array().map_or(&[][..], Vec::as_slice);
         let text = |c: &Value| c["text"].as_str().unwrap_or_default().to_string();
@@ -145,7 +150,7 @@ fn grade(
                 find: find.clone(),
                 cats: cats.clone(),
                 level: li,
-                expect: expect(cats, LEVELS[li].1),
+                expect: expect(cats, LEVELS[li].1, config),
                 flagged,
                 // Comments without letters are flagged locally and have no confidence.
                 confidence: c["confidence"]
@@ -551,9 +556,10 @@ fn grading() {
     let ne = score(ds.iter().filter(|d| d.level == 1), |d| d.flagged);
     assert_eq!((ne.tp, ne.fp, ne.fn_), (0, 0, 2));
     assert_eq!(
-        expect(&["todo".into(), "reference".into()], 2),
+        expect(&["todo".into(), "reference".into()], 2, false),
         Expect::Either
     );
+    assert_eq!(expect(&["restates-code".into()], 1, true), Expect::Keep);
     assert_eq!(
         ds.iter().find(|d| d.find == "same").unwrap().top,
         "restates-code"

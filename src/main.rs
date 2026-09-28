@@ -44,104 +44,39 @@ const MAX_COMMENT: usize = 2000;
 /// Findings listed in a Markdown report, which keeps a PR comment under GitHub's 65k-character limit.
 const MD_ROWS: usize = 200;
 
-/// Tool, compiler and licence comments are kept at every level.
-const DIRECTIVES: &[&str] = &[
-    "eslint-",
-    "@ts-",
-    "prettier-ignore",
-    "biome-ignore",
-    "oxlint-",
-    "deno-lint-",
-    "deno-fmt-",
-    "istanbul ",
-    "c8 ignore",
-    "v8 ignore",
-    "jshint",
-    "jslint",
-    "tslint:",
-    "stylelint-",
+/// Words tools use to switch a check off or back on, as in `eslint-disable`, `ignore=DL3008` or `c8 ignore`.
+const VERBS: &[&str] = &[
+    "disable", "enable", "ignore", "expect", "suppress", "skip", "allow", "nocheck", "off", "on",
+    "restore",
+];
+/// Words that narrow a verb, as in `c8 ignore next` or `ReSharper disable once`.
+const SCOPES: &[&str] = &[
+    "next", "line", "file", "start", "end", "else", "if", "once", "all",
+];
+/// Licences, generated-file markers and bundler annotations, kept wherever they appear.
+const MARKERS: &[&str] = &[
     "prolix-ignore",
-    "noqa",
-    "type: ignore",
-    "pyright:",
-    "mypy:",
-    "pylint:",
-    "fmt: off",
-    "fmt: on",
-    "fmt: skip",
-    "isort:",
-    "pragma: no",
-    "nolint",
-    "rubocop:",
-    "swiftlint:",
-    "nosec",
-    "shellcheck ",
-    "@formatter:",
-    "nosonar",
-    "cspell:",
-    "spell-checker:",
-    "markdownlint-",
-    "phpcs:",
-    "@phpstan-",
-    "@psalm-",
-    "@vite-ignore",
-    "webpack",
-    "#__pure__",
-    "@__pure__",
-    "@__no_side_effects__",
-    "sourcemappingurl=",
-    "@generated",
-    "do not edit",
-    "@jsx",
-    "@flow",
-    "@noflow",
-    "<reference ",
-    "<amd-module",
-    "@jest-environment",
-    "@vitest-environment",
-    "@type ",
-    "@type {",
-    "@type{",
-    "@typedef",
-    "@callback",
-    "@template",
-    "@satisfies",
-    "@overload",
-    "@import",
-    "@param {",
-    "@returns {",
-    "@return {",
-    "@deprecated",
-    "@internal",
-    "@public",
-    "@private",
-    "@hidden",
-    "@inheritdoc",
-    "@experimental",
-    "@alpha",
-    "@beta",
-    "@refresh reset",
     "copyright",
     "spdx-license-identifier",
     "@license",
     "@preserve",
-    "frozen_string_literal",
+    "@generated",
+    "do not edit",
+    "__pure__",
+    "__no_side_effects__",
     "-*-",
-    "vim:",
+    "<reference ",
+    "<amd-module",
 ];
-/// Matched only at the start of the comment's text, as they're ordinary words elsewhere.
-const DIRECTIVE_PREFIXES: &[&str] = &[
-    "eslint",
+/// Language keywords, kept at the start of a line.
+const KEYWORDS: &[&str] = &[
+    "pragma",
+    "region",
+    "endregion",
+    "+build",
     "global ",
     "globals ",
     "exported ",
-    "go:",
-    "+build",
-    "region",
-    "endregion",
-    "pragma",
-    "coding:",
-    "coding=",
     "type:",
 ];
 
@@ -311,7 +246,7 @@ fn run() -> Result<i32, String> {
                 match cache.get(key) {
                     Some(p) => {
                         cached += 1;
-                        u.group = decide(p, level, threshold);
+                        u.group = decide(p, level, threshold, f.lang.config());
                         u.probs = Some(p.clone());
                     }
                     None => pending.push((fi, ui)),
@@ -342,13 +277,14 @@ fn run() -> Result<i32, String> {
         let out = jev::classify(&questions, &key);
         tokens = out.tokens;
         for (&(fi, ui), p) in pending.iter().zip(out.probs) {
+            let config = files[fi].lang.config();
             let u = &mut files[fi].units[ui];
             let Some(p) = p else {
                 unanswered += 1;
                 continue;
             };
             let p: Vec<f32> = p.iter().map(|x| (x * 1000.0).round() / 1000.0).collect();
-            u.group = decide(&p, level, threshold);
+            u.group = decide(&p, level, threshold, config);
             cache.insert(u.ask.take().unwrap().0, p.clone());
             u.probs = Some(p);
         }
@@ -398,7 +334,7 @@ fn run() -> Result<i32, String> {
                         "column": u.col,
                         "text": &f.src[u.start..u.end],
                         "group": u.group,
-                        "confidence": u.probs.as_ref().map(|p| round(removable(p, level))),
+                        "confidence": u.probs.as_ref().map(|p| round(removable(p, level, f.lang.config()))),
                         "probabilities": probs,
                         "fix": u.group.map(|_| {
                             let (a, b, r) = fix::suggestion(&f.src, (u.start, u.end), f.lang.jsx);
@@ -615,10 +551,15 @@ fn units(src: &str, lang: &lex::Lang, level: u8, model: &str) -> Vec<Unit> {
     let mut raws = Vec::new();
     lex::scan(b, lang, 0, &mut raws);
     let mut spans: Vec<(usize, usize, bool)> = Vec::new();
+    let (mut head, mut prev) = (true, 0);
     for r in raws {
         let text = &src[r.start..r.end];
+        head &= b
+            .get(prev..r.start)
+            .is_some_and(|s| s.iter().all(u8::is_ascii_whitespace));
+        prev = r.end;
         // ponytail: JSX text such as `a // b</p>` lexes as a comment; skip it rather than parse JSX.
-        if is_directive(text, r.start)
+        if is_directive(text, head)
             || (lang.jsx && r.line && (text.contains("</") || text.contains("/>")))
         {
             continue;
@@ -646,7 +587,11 @@ fn units(src: &str, lang: &lex::Lang, level: u8, model: &str) -> Vec<Unit> {
             let line = newlines.partition_point(|&p| p < start);
             let ls = if line == 0 { 0 } else { newlines[line - 1] + 1 };
             let (group, ask) = if !text.chars().any(char::is_alphanumeric) {
-                (Some("decorative"), None)
+                let decorative = &jev::CATS[2];
+                (
+                    (jev::level(decorative, lang.config()) <= level).then_some(decorative.name),
+                    None,
+                )
             } else if level == 3 {
                 (Some("comment"), None)
             } else {
@@ -667,35 +612,142 @@ fn units(src: &str, lang: &lex::Lang, level: u8, model: &str) -> Vec<Unit> {
         .collect()
 }
 
-fn is_directive(text: &str, start: usize) -> bool {
-    if (start == 0 && text.starts_with("#!")) || text.starts_with("/*!") || text.starts_with("{-#")
-    {
+/// Tool, compiler and licence comments, which are kept at every level. Tools are recognised by the shape of what
+/// they read, so a new linter's `x-disable-next-line rule` is kept without prolix knowing its name. `head` is set
+/// for comments before any code, where shebangs and file-wide settings live.
+fn is_directive(text: &str, head: bool) -> bool {
+    if (head && text.starts_with("#!")) || text.starts_with("/*!") || text.starts_with("{-#") {
         return true;
     }
     let t = text.to_ascii_lowercase();
-    let body = t.trim_start_matches(|c: char| c.is_whitespace() || "/*#-;!<{([=".contains(c));
-    DIRECTIVES.iter().any(|d| t.contains(d))
-        || DIRECTIVE_PREFIXES.iter().any(|d| body.starts_with(d))
+    let inline = !text.contains('\n') && (head || text.starts_with("/*"));
+    MARKERS.iter().any(|m| t.contains(m))
+        || text.lines().any(|l| {
+            let l = l.trim_matches(|c: char| c.is_whitespace() || "/*#-;!<>{}()[]=".contains(c));
+            KEYWORDS
+                .iter()
+                .any(|k| l.to_ascii_lowercase().starts_with(k))
+                || directive_line(l, inline)
+        })
+}
+
+/// One line of a comment, with its markers trimmed. Directives open with a tool's keyword and go on in rule names,
+/// codes or settings; prose goes on in plain words.
+fn directive_line(l: &str, inline: bool) -> bool {
+    let w: Vec<&str> = l.split_whitespace().collect();
+    let Some(&t0) = w.first() else { return false };
+    // A plain word, as opposed to a rule name, code, path or setting.
+    let prose = |s: &str| {
+        let s = s.trim_matches(|c: char| ",.;:!?\"'".contains(c));
+        !s.is_empty()
+            && s.chars().all(|c| c.is_ascii_alphabetic() || c == '\'')
+            && !s[1..].chars().any(|c| c.is_ascii_uppercase())
+    };
+    // Nothing more, or a rule name or code after any scope words.
+    let args = |rest: &[&str]| {
+        let rest: Vec<_> = rest
+            .iter()
+            .skip_while(|r| SCOPES.contains(&&*r.to_ascii_lowercase()))
+            .collect();
+        rest.first().is_none_or(|r| !prose(r))
+    };
+    // `@ts-ignore`, `@flow`, `@jsx h`, `@type {Foo}`, `$FlowFixMe`. A plain tag followed by prose is documentation.
+    if let Some(tag) = t0.strip_prefix(['@', '$']) {
+        let name = tag.split(['=', '(']).next().unwrap_or("");
+        if name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "-_:".contains(c))
+        {
+            return !prose(tag) || w.len() <= 2 || w[1].starts_with('{');
+        }
+    }
+    // `noqa: E501`, `nosec`, `NOLINTNEXTLINE(rule)`, `nolint:errcheck`.
+    let head = t0.split(|c: char| ":([=".contains(c)).next().unwrap_or("");
+    let rest = head.get(2..).unwrap_or("");
+    if head.len() > 3
+        && ((head.starts_with("no") && rest.bytes().all(|b| b.is_ascii_lowercase()))
+            || (head.starts_with("NO") && rest.bytes().all(|b| b.is_ascii_uppercase())))
+        && args(&w[1..])
+    {
+        return true;
+    }
+    // `rubocop:disable`, `go:generate`, `cspell:words`, `CHECKSTYLE:OFF`.
+    if let Some((a, b)) = t0.split_once(':') {
+        if a.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
+            && b.starts_with(|c: char| c.is_ascii_alphabetic())
+            && (a.starts_with(|c: char| c.is_ascii_lowercase()) || t0 == t0.to_ascii_uppercase())
+        {
+            return true;
+        }
+    }
+    // `eslint-disable-next-line rule`, `c8 ignore next`, `shellcheck disable=SC2086`, `fmt: off`. A spaced verb
+    // needs a tool before it, which prose's capitalised first word isn't.
+    let tool =
+        !t0.contains('\'') && !(t0.starts_with(|c: char| c.is_ascii_uppercase()) && prose(t0));
+    for (k, tok) in w.iter().take(2).enumerate() {
+        let segs: Vec<String> = tok
+            .to_ascii_lowercase()
+            .split(|c: char| "-:=_([".contains(c))
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .collect();
+        if segs.iter().any(|s| VERBS.contains(&s.as_str()))
+            && (if k == 0 { segs.len() > 1 } else { tool })
+            && args(&w[k + 1..])
+        {
+            return true;
+        }
+    }
+    // Settings: `syntax=docker/dockerfile:1`, `shellcheck shell=bash`, `renovate: datasource=docker`, and in a file's
+    // header or a one-line block comment `frozen_string_literal: true`, `webpackChunkName: "x"` or `jshint esversion: 6`.
+    // Elsewhere a lone `key: value` is more likely commented-out YAML or an object literal. Each key may take one word.
+    let key = |s: &str| {
+        s.starts_with(|c: char| c.is_ascii_lowercase() || c == '$')
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || "-_.$".contains(c))
+    };
+    let pair = |s: &str| {
+        s.split_once('=')
+            .is_some_and(|(a, b)| key(a) && !b.is_empty())
+    };
+    let label = |s: &str| s.strip_suffix(':').is_some_and(key);
+    let k =
+        usize::from(w.len() > 1 && prose(t0) && !t0.ends_with(':') && (label(w[1]) || pair(w[1])));
+    if pair(w[k]) || (label(w[k]) && (inline || w[k + 1..].iter().any(|s| pair(s)))) {
+        let keys = w[k..].iter().filter(|s| label(s)).count();
+        if w[k + 1..].iter().filter(|s| prose(s)).count() <= keys {
+            return true;
+        }
+    }
+    // A version kept beside a pinned hash, as in `uses: actions/checkout@<sha> # v4.1.1`, which update bots rewrite.
+    let v = t0.trim_start_matches(['v', 'V']);
+    w.len() == 1
+        && v.starts_with(|c: char| c.is_ascii_digit())
+        && (v.len() < t0.len() || v.contains('.'))
+        && v.chars()
+            .all(|c| c.is_ascii_alphanumeric() || ".-+".contains(c))
 }
 
 /// Probability that the comment belongs to a category this level removes.
-fn removable(p: &[f32], level: u8) -> f32 {
+fn removable(p: &[f32], level: u8, config: bool) -> f32 {
     jev::CATS
         .iter()
         .zip(p)
-        .filter(|(c, _)| c.level <= level)
+        .filter(|(c, _)| jev::level(c, config) <= level)
         .map(|(_, &x)| x)
         .sum()
 }
 
-fn decide(p: &[f32], level: u8, threshold: f32) -> Option<&'static str> {
-    if removable(p, level) < threshold {
+fn decide(p: &[f32], level: u8, threshold: f32, config: bool) -> Option<&'static str> {
+    if removable(p, level, config) < threshold {
         return None;
     }
     jev::CATS
         .iter()
         .zip(p)
-        .filter(|(c, _)| c.level <= level)
+        .filter(|(c, _)| jev::level(c, config) <= level)
         .max_by(|a, b| a.1.total_cmp(b.1))
         .map(|(c, _)| c.name)
 }
@@ -756,10 +808,81 @@ mod tests {
 
     #[test]
     fn directives_and_merging() {
-        assert!(is_directive("// eslint-disable-next-line no-console", 5));
-        assert!(is_directive("#!/usr/bin/env node", 0));
-        assert!(is_directive("/// <reference types=\"vite/client\" />", 0));
-        assert!(!is_directive("// set the global counter", 0));
+        assert!(is_directive("#!/usr/bin/env node", true));
+        assert!(is_directive(
+            "/// <reference types=\"vite/client\" />",
+            false
+        ));
+        assert!(is_directive("# frozen_string_literal: true", true));
+        assert!(!is_directive("# timeout: 30", false));
+        assert!(!is_directive("// set the global counter", false));
+        // Kept by shape alone: none of these tools is named in prolix.
+        for d in [
+            "// eslint-disable-next-line no-console",
+            "// react-doctor-disable-next-line react-doctor/no-array-index-key -- stable order",
+            "{/* react-doctor-disable-line */}",
+            "// biome-ignore lint/suspicious/noExplicitAny: third-party callback shape",
+            "// @ts-expect-error window.acme is injected by the host page",
+            "/* c8 ignore next */",
+            "/* istanbul ignore else */",
+            "# noqa: E501",
+            "# type: ignore[attr-defined]",
+            "# pylint: disable=invalid-name",
+            "# fmt: off",
+            "# pragma: no cover",
+            "// NOLINTNEXTLINE(bugprone-use-after-move)",
+            "//nolint:errcheck",
+            "# nosec B101",
+            "// NOSONAR",
+            "# shellcheck disable=SC2086",
+            "# shellcheck source=./lib.sh",
+            "# hadolint ignore=DL3008",
+            "# yamllint disable-line rule:line-length",
+            "# rubocop:disable Style/GuardClause",
+            "# tfsec:ignore:aws-s3-enable-bucket-logging",
+            "# checkov:skip=CKV_AWS_20: public site",
+            "// gitleaks:allow",
+            "// clang-format off",
+            "// ReSharper disable once InconsistentNaming",
+            "// swiftlint:disable:next force_cast",
+            "// @formatter:off",
+            "//go:generate stringer -type=Pill",
+            "/* @vite-ignore */",
+            "/* webpackChunkName: \"admin\", webpackPrefetch: true */",
+            "/* jshint esversion: 6 */",
+            "# syntax=docker/dockerfile:1",
+            "# yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json",
+            "# renovate: datasource=docker depName=nginx",
+            "# v4.1.1",
+            "// @flow",
+            "/** @jsx h */",
+            "/**\n * Adds.\n * @param {number} a\n */",
+            "/* #__PURE__ */",
+            "// #region Helpers",
+        ] {
+            assert!(is_directive(d, false), "{d}");
+        }
+        for p in [
+            "// Please ignore this",
+            "// We disable caching here",
+            "// Re-enable the button once loaded",
+            "// just ignore it",
+            "// nothing to do here",
+            "// TODO: fix this",
+            "// Note: this is slow",
+            "// @param x the count",
+            "// Don't re-enable",
+            "# x=5 is the limit we chose",
+            "// see https://example.com/docs",
+            "// localhost:3000 is the dev server",
+            "// one-off script for the migration",
+            "# - uses: actions/cache@v4",
+            "// @pqina/flip builds the panels itself",
+            "/**\n * ![icon](data:image/svg+xml;utf-8,%3Csvg)\n */",
+            "/*\n * (anyvan monolith: templates/amp.tpl)\n */",
+        ] {
+            assert!(!is_directive(p, false), "{p}");
+        }
         let src = "a\n// one\n// two\n// eslint-disable-next-line\n// three\nb // four\n// ----\n";
         let u = units(src, &lex::TS, 1, "m");
         let texts: Vec<_> = u.iter().map(|u| &src[u.start..u.end]).collect();
@@ -775,8 +898,11 @@ mod tests {
         let mut p = vec![0.0; jev::CATS.len()];
         p[0] = 0.4;
         p[6] = 0.5;
-        assert_eq!(decide(&p, 1, 0.6), None);
-        assert_eq!(decide(&p, 2, 0.6), Some("clarifies"));
+        assert_eq!(decide(&p, 1, 0.6, false), None);
+        assert_eq!(decide(&p, 2, 0.6, false), Some("clarifies"));
+        p[0] = 0.9;
+        assert_eq!(decide(&p, 1, 0.6, false), Some("restates-code"));
+        assert_eq!(decide(&p, 1, 0.6, true), None);
         assert_eq!(parse_level("Value Add"), Ok(1));
     }
 }
