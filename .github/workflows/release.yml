@@ -27,7 +27,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - run: npm ci
+      # ponytail: `npm ci` rejects the lockfile npm 11 writes, because @manypkg/find-root hoists @types/node 12 under an
+      # optional peer that wants 18. Switch back to `npm ci` once npm validates optional peers the way it installs them.
+      - run: npm install --no-audit --no-fund
       - id: changesets
         uses: changesets/action@v1
         with:
