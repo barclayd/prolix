@@ -130,7 +130,9 @@ jobs:
           npm publish --access public --tag "$TAG"
       # Installs what was just published. New versions can take several minutes to show up on the registry.
       # Each try gets a fresh cache: npx would otherwise keep reusing an install made before a platform package showed up.
+      # It runs outside the checkout, where npx would find the uninstalled npm/cli workspace instead.
       - name: Check the package runs
+        working-directory: ${{ runner.temp }}
         run: |
           for i in $(seq 30); do
             npm_config_cache=$(mktemp -d) npx --yes "@prolix/cli@$VERSION" --version && exit 0
