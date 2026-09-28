@@ -1,7 +1,8 @@
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering::Relaxed};
+use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -122,7 +123,7 @@ source around it with <<COMMENT>> marking where the comment sits, and `language`
 
 const BATCH_QUESTIONS: usize = 32;
 const BATCH_TOKENS: usize = 40_000;
-const WORKERS: usize = 16;
+pub const WORKERS: usize = 16;
 const ATTEMPTS: u32 = 6;
 
 pub fn question(comment: &str, code: &str, language: &str) -> Value {
@@ -183,30 +184,49 @@ pub fn classify(qs: &[Value], key: &str) -> Outcome {
         batches.push(start..qs.len());
     }
 
+    let req = agent
+        .post(&url)
+        .set("Authorization", &format!("Bearer {key}"));
+    let (answers, error) = parallel(batches.len(), |b| {
+        let questions: Map<String, Value> = batches[b]
+            .clone()
+            .map(|i| (i.to_string(), qs[i].clone()))
+            .collect();
+        let body = json!({ "model": model, "state": STATE, "questions": questions });
+        post(&req, "Jev", "TYPESAFE_API_KEY", &body)
+    });
+    let (mut probs, mut tokens) = (vec![None; qs.len()], 0);
+    for (b, v) in batches.iter().zip(answers) {
+        let Some(v) = v else { continue };
+        tokens += v["usage"]["input_tokens"].as_u64().unwrap_or(0);
+        for i in b.clone() {
+            probs[i] = parse(&v["answers"][i.to_string()]);
+        }
+    }
+    Outcome {
+        probs,
+        tokens,
+        error,
+    }
+}
+
+/// Runs `job` for each of `0..n` on up to `WORKERS` threads, stopping at the first error.
+pub fn parallel<T: Send>(
+    n: usize,
+    job: impl Fn(usize) -> Result<T, String> + Sync,
+) -> (Vec<Option<T>>, Option<String>) {
     let next = AtomicUsize::new(0);
-    let used = AtomicU64::new(0);
     let error = Mutex::new(None);
-    let probs = Mutex::new(vec![None; qs.len()]);
+    let out = Mutex::new((0..n).map(|_| None).collect::<Vec<_>>());
     std::thread::scope(|s| {
-        for _ in 0..WORKERS.min(batches.len()) {
+        for _ in 0..WORKERS.min(n) {
             s.spawn(|| loop {
-                let b = next.fetch_add(1, Relaxed);
-                if b >= batches.len() || error.lock().unwrap().is_some() {
+                let i = next.fetch_add(1, Relaxed);
+                if i >= n || error.lock().unwrap().is_some() {
                     break;
                 }
-                let questions: Map<String, Value> = batches[b]
-                    .clone()
-                    .map(|i| (i.to_string(), qs[i].clone()))
-                    .collect();
-                let body = json!({ "model": model, "state": STATE, "questions": questions });
-                match post(&agent, &url, key, &body) {
-                    Ok(v) => {
-                        used.fetch_add(v["usage"]["input_tokens"].as_u64().unwrap_or(0), Relaxed);
-                        let mut probs = probs.lock().unwrap();
-                        for i in batches[b].clone() {
-                            probs[i] = parse(&v["answers"][i.to_string()]);
-                        }
-                    }
+                match job(i) {
+                    Ok(v) => out.lock().unwrap()[i] = Some(v),
                     Err(e) => {
                         error.lock().unwrap().get_or_insert(e);
                         break;
@@ -215,11 +235,7 @@ pub fn classify(qs: &[Value], key: &str) -> Outcome {
             });
         }
     });
-    Outcome {
-        probs: probs.into_inner().unwrap(),
-        tokens: used.into_inner(),
-        error: error.into_inner().unwrap(),
-    }
+    (out.into_inner().unwrap(), error.into_inner().unwrap())
 }
 
 fn parse(a: &Value) -> Option<Vec<f32>> {
@@ -238,32 +254,34 @@ fn parse(a: &Value) -> Option<Vec<f32>> {
     )
 }
 
-fn post(agent: &ureq::Agent, url: &str, key: &str, body: &Value) -> Result<Value, String> {
+/// Sends `body`, retrying rate limits and server errors. `service` and `key_var` name the API in errors.
+pub fn post(
+    req: &ureq::Request,
+    service: &str,
+    key_var: &str,
+    body: &Value,
+) -> Result<Value, String> {
     let mut wait = Duration::from_millis(500);
     for attempt in 1..=ATTEMPTS {
-        let retry_after = match agent
-            .post(url)
-            .set("Authorization", &format!("Bearer {key}"))
-            .send_json(body)
-        {
+        let retry_after = match req.clone().send_json(body) {
             Ok(r) => {
                 return r
                     .into_json()
-                    .map_err(|e| format!("unreadable response from Jev: {e}"))
+                    .map_err(|e| format!("unreadable response from {service}: {e}"))
             }
             Err(ureq::Error::Status(401, _)) => {
-                return Err("Jev rejected TYPESAFE_API_KEY (401)".into())
+                return Err(format!("{service} rejected {key_var} (401)"))
             }
             Err(ureq::Error::Status(code, r)) if code == 429 || code >= 500 => {
                 r.header("retry-after").and_then(|s| s.parse::<f64>().ok())
             }
             Err(ureq::Error::Status(code, r)) => {
                 return Err(format!(
-                    "Jev returned {code}: {}",
+                    "{service} returned {code}: {}",
                     r.into_string().unwrap_or_default()
                 ))
             }
-            Err(e) if attempt == ATTEMPTS => return Err(format!("could not reach Jev: {e}")),
+            Err(e) if attempt == ATTEMPTS => return Err(format!("could not reach {service}: {e}")),
             Err(_) => None,
         };
         let jitter = Duration::from_millis(
@@ -279,7 +297,7 @@ fn post(agent: &ureq::Agent, url: &str, key: &str, body: &Value) -> Result<Value
         wait *= 2;
     }
     Err(format!(
-        "Jev is overloaded; gave up after {ATTEMPTS} attempts"
+        "{service} is overloaded; gave up after {ATTEMPTS} attempts"
     ))
 }
 
@@ -294,7 +312,15 @@ pub fn hash(parts: &[&str]) -> u64 {
     h
 }
 
-pub type Cache = HashMap<String, Vec<f32>>;
+/// A cached answer: Jev's probabilities in `CATS` order, or Claude's shorter comment.
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Answer {
+    Probs(Vec<f32>),
+    Text(String),
+}
+
+pub type Cache = HashMap<String, Answer>;
 
 pub fn load_cache(path: &Path) -> Cache {
     std::fs::read(path)

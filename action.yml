@@ -9,6 +9,9 @@ inputs:
   api-key:
     description: Typesafe API key for Jev, from a secret. When it's empty, as on pull requests from forks, the check is skipped.
     required: false
+  anthropic-api-key:
+    description: Anthropic API key, from a secret. Needed when prolix.jsonc turns on `shorten`; without it kept comments aren't shortened.
+    required: false
   level:
     description: all, value-add, necessary or none. Defaults to prolix.jsonc, then value-add.
     default: ""
@@ -40,6 +43,7 @@ runs:
       shell: bash
       env:
         TYPESAFE_API_KEY: ${{ inputs.api-key }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
         GH_TOKEN: ${{ github.token }}
         INPUT_LEVEL: ${{ inputs.level }}
         INPUT_SCOPE: ${{ inputs.scope }}
@@ -113,7 +117,7 @@ runs:
                 path,
                 line: .fix.endLine,
                 side: "RIGHT",
-                body: ("\($m)\n**prolix**: `\(.group)`. Commit the suggestion to remove it.\n\n```suggestion\n"
+                body: ("\($m)\n**prolix**: `\(.group)`. Commit the suggestion to \(if .group == "wordy" then "shorten" else "remove" end) it.\n\n```suggestion\n"
                   + (if .fix.replacement == "" then "" else .fix.replacement + "\n" end) + "```")
               } + (if .fix.startLine < .fix.endLine then {start_line: .fix.startLine, start_side: "RIGHT"} else {} end)
             ] as $new

@@ -3,7 +3,7 @@ title: GitHub Action
 description: Inputs, outputs and behaviour of barclayd/prolix, the GitHub Action that reviews the comments a pull request adds.
 ---
 
-`barclayd/prolix@v0` runs prolix on the lines a pull request adds. When it flags something, it posts a summary comment and a one-click suggestion to remove each flagged comment. Later runs update the same summary comment, which turns to ✅ once the pull request is clean. They don't repeat suggestions, and they delete ones that no longer apply.
+`barclayd/prolix@v0` runs prolix on the lines a pull request adds. When it flags something, it posts a summary comment and a one-click suggestion to remove each flagged comment, or to shorten it when [`shorten`](/reference/configuration/#shortening) is on. Later runs update the same summary comment, which turns to ✅ once the pull request is clean. They don't repeat suggestions, and they delete ones that no longer apply.
 
 ```yaml title=".github/workflows/prolix.yml"
 name: prolix
@@ -29,6 +29,7 @@ jobs:
 | Input | Default | |
 | --- | --- | --- |
 | `api-key` | | Typesafe API key, from a secret. When it's empty the check is skipped with a notice, because GitHub doesn't pass secrets to pull requests from forks or Dependabot. |
+| `anthropic-api-key` | | Anthropic API key, from a secret. Needed when `prolix.jsonc` turns on [`shorten`](/reference/configuration/#shortening). Without it, comments are kept as they are. |
 | `level` | `prolix.jsonc`, then `value-add` | `all`, `value-add`, `necessary` or `none`. See [Levels](/reference/levels/). |
 | `scope` | `changed` | `changed` checks comments on the lines the pull request adds. `full` checks the whole repository. Events other than pull requests always check the whole repository. |
 | `comment` | `true` | Post a summary comment when something is flagged, and keep it up to date. |

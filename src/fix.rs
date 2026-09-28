@@ -1,9 +1,16 @@
-/// Removes each `(start, end)` comment span from `src`, taking whole lines with it when the comment stood alone.
-pub fn apply(src: &str, spans: &[(usize, usize)], jsx: bool) -> String {
+/// Applies each `(start, end, text)` edit to `src`. A non-empty `text` replaces the comment in place; an empty one
+/// removes it, taking whole lines with it when the comment stood alone.
+pub fn apply(src: &str, edits: &[(usize, usize, &str)], jsx: bool) -> String {
     let b = src.as_bytes();
     let mut out = String::with_capacity(src.len());
     let mut cur = 0;
-    for &(s, e) in spans {
+    for &(s, e, text) in edits {
+        if !text.is_empty() {
+            out.push_str(&src[cur..s.max(cur)]);
+            out.push_str(text);
+            cur = e;
+            continue;
+        }
         let (s, e) = if jsx { braces(b, s, e) } else { (s, e) };
         let (ls, le) = (line_start(b, s), line_end(b, e));
         let eol = if le > e && b[le - 1] == b'\r' {
@@ -58,10 +65,10 @@ pub fn apply(src: &str, spans: &[(usize, usize)], jsx: bool) -> String {
     out
 }
 
-/// The lines that removing one comment changes, as 1-based `(first, last, replacement)`, for a review suggestion.
+/// The lines that one edit changes, as 1-based `(first, last, replacement)`, for a review suggestion.
 // ponytail: re-applies the fix to the whole file per comment, O(file × flagged); fine for PR-sized output.
-pub fn suggestion(src: &str, span: (usize, usize), jsx: bool) -> (usize, usize, String) {
-    let fixed = apply(src, &[span], jsx);
+pub fn suggestion(src: &str, edit: (usize, usize, &str), jsx: bool) -> (usize, usize, String) {
+    let fixed = apply(src, &[edit], jsx);
     let (a, b): (Vec<_>, Vec<_>) = (src.lines().collect(), fixed.lines().collect());
     let pre = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
     let suf = a
@@ -132,7 +139,7 @@ mod tests {
             .iter()
             .map(|p| {
                 let s = src.find(p).unwrap();
-                (s, s + p.len())
+                (s, s + p.len(), "")
             })
             .collect();
         apply(src, &spans, jsx)
@@ -156,12 +163,18 @@ mod tests {
     fn suggestions() {
         let at = |src: &str, p: &str| {
             let s = src.find(p).unwrap();
-            super::suggestion(src, (s, s + p.len()), false)
+            super::suggestion(src, (s, s + p.len(), ""), false)
         };
         assert_eq!(at("a\n  // x\nb\n", "// x"), (2, 2, "".into()));
         assert_eq!(at("a(); // x\nb\n", "// x"), (1, 1, "a();".into()));
         assert_eq!(at("a\n\n// x\n\nb\n", "// x"), (3, 4, "".into()));
         assert_eq!(at("a\n// x\n// y\nb", "// x\n// y"), (2, 3, "".into()));
+        let src = "a\n  // x y\n  // z\nb\n";
+        let s = src.find("//").unwrap();
+        assert_eq!(
+            super::suggestion(src, (s, src.find("z").unwrap() + 1, "// x z"), false),
+            (2, 3, "  // x z".into())
+        );
     }
 
     #[test]

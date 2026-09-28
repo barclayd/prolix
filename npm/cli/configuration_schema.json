@@ -26,6 +26,11 @@
       "description": "Globs to skip, relative to this file, on top of .gitignore.",
       "type": "array",
       "items": { "type": "string" }
+    },
+    "shorten": {
+      "description": "Rewrite comments that are kept but could say the same in fewer words, using Claude. Needs ANTHROPIC_API_KEY.",
+      "type": "boolean",
+      "default": false
     }
   },
   "additionalProperties": false

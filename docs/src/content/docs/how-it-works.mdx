@@ -7,7 +7,8 @@ description: How prolix finds comments, how Jev judges them, how the judgements 
 2. **Skip directives.** Tool and compiler directives, licences and `prolix-ignore` comments are kept without asking Jev. See [Directives](/reference/levels/#directives).
 3. **Judge.** Each remaining comment goes to [Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev) with a few lines of the code around it. Jev scores it against eleven [categories](/reference/levels/#categories). prolix sends up to 32 comments per request and up to 16 requests at a time, and retries rate limits and server errors with backoff.
 4. **Decide.** A comment is flagged when the scores of the categories its level removes add up to the threshold.
-5. **Fix.** `--fix` removes each flagged comment, the line it was on if nothing else was, and the blank-line gap it leaves.
+5. **Shorten.** With [`shorten`](/reference/configuration/#shortening) on, Claude rewrites comments that are kept in fewer words. A rewrite is flagged as `wordy` only when it's shorter and contains nothing but comments.
+6. **Fix.** `--fix` removes each flagged comment, the line it was on if nothing else was, and the blank-line gap it leaves. A `wordy` comment is replaced with its rewrite.
 
 ## Evals
 
@@ -32,5 +33,6 @@ cargo test --release --test evals -- --ignored --nocapture
 - `{/* */}` comments in Svelte and Astro templates aren't linted.
 - C++ raw strings (`R"(...)"`) aren't recognised.
 - The cache only grows. Delete it to reset.
+- A rewrite isn't sent back to Jev, and the indentation of a multi-line rewrite's later lines is Claude's.
 
 Found another? [Open an issue](https://github.com/barclayd/prolix/issues).

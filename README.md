@@ -85,6 +85,7 @@ jobs:
 | Input | Default | |
 | --- | --- | --- |
 | `api-key` | | Typesafe API key. When it's empty the check is skipped with a notice, because GitHub doesn't pass secrets to pull requests from forks or Dependabot. |
+| `anthropic-api-key` | | Anthropic API key, needed when `prolix.jsonc` turns on `shorten` |
 | `level` | `prolix.jsonc`, then `value-add` | `all`, `value-add`, `necessary` or `none` |
 | `scope` | `changed` | `full` checks the whole repository |
 | `comment` | `true` | post and update the summary comment |
@@ -139,11 +140,15 @@ Add `prolix-ignore` to any comment to keep it.
   // How sure Jev must be (0-1) that a comment is removable before flagging it.
   "threshold": 0.6,
   // Globs relative to this file, on top of .gitignore.
-  "ignore": ["vendor/**", "**/*.generated.ts"]
+  "ignore": ["vendor/**", "**/*.generated.ts"],
+  // Rewrite kept comments that could say the same in fewer words. Needs ANTHROPIC_API_KEY.
+  "shorten": true
 }
 ```
 
 `--level` on the command line overrides the file.
+
+With `shorten` on, each comment that's kept at `value-add` or `necessary` and runs to 8 words or more goes to Claude (`claude-opus-5`) to be said in fewer words. A rewrite is flagged as `wordy` only when it has fewer words, fewer characters and no more lines than the original, and is nothing but comments, so `--fix` and the action's suggestions can't insert code. Rewrites are cached with Jev's answers.
 
 ## Jev and caching
 
@@ -152,6 +157,8 @@ Add `prolix-ignore` to any comment to keep it.
 | `TYPESAFE_API_KEY` | required for `value-add` and `necessary` |
 | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` |
 | `TYPESAFE_DEFAULT_MODEL` | `jev-latest` |
+| `ANTHROPIC_API_KEY` | required for `shorten` |
+| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` |
 
 Each comment is sent with a few lines of surrounding code. prolix batches up to 32 comments per request and sends up to 16 requests in parallel. It retries rate limits and 5xx responses with backoff.
 

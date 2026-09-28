@@ -10,6 +10,9 @@ pub struct Config {
     pub threshold: Option<f32>,
     #[serde(default)]
     pub ignore: Vec<String>,
+    /// Rewrite kept comments in fewer words with Claude.
+    #[serde(default)]
+    pub shorten: bool,
 }
 
 /// Finds `prolix.jsonc` (or `prolix.json`) in the current directory or a parent; returns it with its directory.

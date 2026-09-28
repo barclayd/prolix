@@ -3,6 +3,7 @@ mod diff;
 mod fix;
 mod jev;
 mod lex;
+mod shorten;
 
 use ignore::{
     overrides::{Override, OverrideBuilder},
@@ -35,7 +36,9 @@ Levels:
   none        remove every comment except tool directives and licences
 
 Settings are read from prolix.jsonc in this directory or a parent.
-value-add and necessary need TYPESAFE_API_KEY.
+value-add and necessary need TYPESAFE_API_KEY. With `shorten` on, comments
+that are kept but could say the same in fewer words are rewritten by Claude,
+which needs ANTHROPIC_API_KEY.
 ";
 
 const LEVELS: [&str; 4] = ["all", "value-add", "necessary", "none"];
@@ -95,8 +98,10 @@ struct Unit {
     group: Option<&'static str>,
     /// Jev's probabilities in `jev::CATS` order, once answered.
     probs: Option<Vec<f32>>,
-    /// Cache key and surrounding code, while the comment awaits Jev.
+    /// Cache key and surrounding code, for comments Jev judges.
     ask: Option<(String, String)>,
+    /// Claude's shorter wording, for a comment that's kept.
+    rewrite: Option<String>,
 }
 
 fn main() {
@@ -244,12 +249,12 @@ fn run() -> Result<i32, String> {
             checked += 1;
             if let Some((key, _)) = &u.ask {
                 match cache.get(key) {
-                    Some(p) => {
+                    Some(jev::Answer::Probs(p)) => {
                         cached += 1;
                         u.group = decide(p, level, threshold, f.lang.config());
                         u.probs = Some(p.clone());
                     }
-                    None => pending.push((fi, ui)),
+                    _ => pending.push((fi, ui)),
                 }
             }
         }
@@ -285,7 +290,10 @@ fn run() -> Result<i32, String> {
             };
             let p: Vec<f32> = p.iter().map(|x| (x * 1000.0).round() / 1000.0).collect();
             u.group = decide(&p, level, threshold, config);
-            cache.insert(u.ask.take().unwrap().0, p.clone());
+            cache.insert(
+                u.ask.as_ref().unwrap().0.clone(),
+                jev::Answer::Probs(p.clone()),
+            );
             u.probs = Some(p);
         }
         jev::save_cache(&cache_path, &cache);
@@ -297,13 +305,82 @@ fn run() -> Result<i32, String> {
     if unanswered > 0 {
         eprintln!("prolix: Jev gave no answer for {unanswered} comments; they were kept");
     }
-    let flagged = |f: &File| -> Vec<(usize, usize)> {
-        f.units
-            .iter()
-            .filter(|u| u.group.is_some())
-            .map(|u| (u.start, u.end))
-            .collect()
-    };
+
+    let (mut short_asked, mut short_cached) = (0, 0);
+    if cfg.shorten && (1..=2).contains(&level) {
+        let mut asks = Vec::new();
+        for (fi, f) in files.iter_mut().enumerate() {
+            for (ui, u) in f.units.iter_mut().enumerate() {
+                let text = &f.src[u.start..u.end];
+                let (Some((_, code)), None, Some(_)) = (&u.ask, u.group, &u.probs) else {
+                    continue;
+                };
+                if text.len() > MAX_COMMENT || text.split_whitespace().count() < shorten::MIN_WORDS
+                {
+                    continue;
+                }
+                let key = jev::hash(&[
+                    "shorten",
+                    shorten::MODEL,
+                    shorten::PROMPT_VERSION,
+                    f.lang.name,
+                    text,
+                    code,
+                ]);
+                let key = format!("{key:016x}");
+                match cache.get(&key) {
+                    Some(jev::Answer::Text(r)) => {
+                        short_cached += 1;
+                        u.rewrite = shorten::accept(text, r, f.lang, eol(&f.src, u.end));
+                        u.group = u.rewrite.is_some().then_some("wordy");
+                    }
+                    _ => asks.push((fi, ui, key)),
+                }
+            }
+        }
+        let key = std::env::var("ANTHROPIC_API_KEY")
+            .ok()
+            .filter(|k| !k.is_empty());
+        match key {
+            _ if asks.is_empty() => {}
+            None => eprintln!(
+                "prolix: ANTHROPIC_API_KEY is not set, so {} comments weren't shortened",
+                asks.len()
+            ),
+            Some(key) => {
+                if std::io::stderr().is_terminal() {
+                    eprintln!("Asking Claude to shorten {} comments…", asks.len());
+                }
+                short_asked = asks.len();
+                let prompts: Vec<_> = asks
+                    .iter()
+                    .map(|&(fi, ui, _)| {
+                        let (f, u) = (&files[fi], &files[fi].units[ui]);
+                        (
+                            &f.src[u.start..u.end],
+                            u.ask.as_ref().unwrap().1.as_str(),
+                            f.lang.name,
+                        )
+                    })
+                    .collect();
+                let (out, error) = shorten::rewrite(&prompts, &key);
+                for ((fi, ui, key), r) in asks.into_iter().zip(out) {
+                    let Some(r) = r else { continue };
+                    let f = &mut files[fi];
+                    let u = &mut f.units[ui];
+                    u.rewrite =
+                        shorten::accept(&f.src[u.start..u.end], &r, f.lang, eol(&f.src, u.end));
+                    u.group = u.rewrite.is_some().then_some("wordy");
+                    cache.insert(key, jev::Answer::Text(r));
+                }
+                jev::save_cache(&cache_path, &cache);
+                if let Some(e) = error {
+                    return Err(e);
+                }
+            }
+        }
+    }
+
     if fix {
         for f in &files {
             let spans = flagged(f);
@@ -337,7 +414,8 @@ fn run() -> Result<i32, String> {
                         "confidence": u.probs.as_ref().map(|p| round(removable(p, level, f.lang.config()))),
                         "probabilities": probs,
                         "fix": u.group.map(|_| {
-                            let (a, b, r) = fix::suggestion(&f.src, (u.start, u.end), f.lang.jsx);
+                            let edit = (u.start, u.end, u.rewrite.as_deref().unwrap_or(""));
+                            let (a, b, r) = fix::suggestion(&f.src, edit, f.lang.jsx);
                             serde_json::json!({ "startLine": a, "endLine": b, "replacement": r })
                         }),
                     })
@@ -357,6 +435,8 @@ fn run() -> Result<i32, String> {
                 "cached": cached,
                 "unanswered": unanswered,
                 "inputTokens": tokens,
+                "claudeAsked": short_asked,
+                "claudeCached": short_cached,
                 "elapsedMs": t0.elapsed().as_millis() as u64,
             },
         });
@@ -420,7 +500,15 @@ fn run() -> Result<i32, String> {
     let lvl = LEVELS[level as usize];
     let s = |n: usize| if n == 1 { "" } else { "s" };
     groups.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+    let act = if groups.iter().any(|(g, _)| *g == "wordy") {
+        "fix"
+    } else {
+        "remove"
+    };
     let what = |g: &str| {
+        if g == "wordy" {
+            return "could say the same in fewer words";
+        }
         jev::CATS
             .iter()
             .find(|c| c.name == g)
@@ -440,14 +528,28 @@ fn run() -> Result<i32, String> {
             tokens / 1000
         );
     }
+    if short_asked + short_cached > 0 {
+        let _ = write!(
+            stats,
+            " · Claude: {short_asked} asked, {short_cached} cached"
+        );
+    }
 
     if md {
         let mut m = String::new();
         if found == 0 {
             let _ = writeln!(m, "### ✅ prolix: no comments to remove (level: {lvl})");
         } else {
-            let did = if fix { "removed" } else { "found" };
-            let rest = if fix { "" } else { " to remove" };
+            let did = match (fix, act) {
+                (false, _) => "found",
+                (true, "fix") => "fixed",
+                (true, _) => "removed",
+            };
+            let rest = if fix {
+                String::new()
+            } else {
+                format!(" to {act}")
+            };
             let _ = writeln!(
                 m,
                 "### prolix {did} {found} comment{}{rest} (level: {lvl})\n",
@@ -468,7 +570,7 @@ fn run() -> Result<i32, String> {
             }
             m.push_str("\n</details>\n");
             if !fix {
-                let _ = writeln!(m, "\nRun `npx @prolix/cli{again} --fix` to remove them.");
+                let _ = writeln!(m, "\nRun `npx @prolix/cli{again} --fix` to {act} them.");
             }
         }
         let _ = writeln!(m, "\n<sub>{stats}</sub>");
@@ -483,7 +585,11 @@ fn run() -> Result<i32, String> {
             paint("32", "✓")
         );
     } else {
-        let verb = if fix { "Removed" } else { "Found" };
+        let verb = match (fix, act) {
+            (false, _) => "Found",
+            (true, "fix") => "Fixed",
+            (true, _) => "Removed",
+        };
         let gap = if out.is_empty() { "" } else { "\n" };
         let _ = writeln!(
             out,
@@ -500,7 +606,7 @@ fn run() -> Result<i32, String> {
             );
         }
         if !fix {
-            let _ = writeln!(out, "\nRun `prolix{again} --fix` to remove them.");
+            let _ = writeln!(out, "\nRun `prolix{again} --fix` to {act} them.");
         }
     }
     let _ = writeln!(out, "{}", paint("2", &stats));
@@ -607,6 +713,7 @@ fn units(src: &str, lang: &lex::Lang, level: u8, model: &str) -> Vec<Unit> {
                 group,
                 probs: None,
                 ask,
+                rewrite: None,
             }
         })
         .collect()
@@ -754,6 +861,23 @@ fn decide(p: &[f32], level: u8, threshold: f32, config: bool) -> Option<&'static
 
 fn shown(path: &Path) -> String {
     path.strip_prefix(".").unwrap_or(path).display().to_string()
+}
+
+/// The comment's edits for `--fix`: a shorter wording, or an empty string to remove it.
+fn flagged(f: &File) -> Vec<(usize, usize, &str)> {
+    f.units
+        .iter()
+        .filter(|u| u.group.is_some())
+        .map(|u| (u.start, u.end, u.rewrite.as_deref().unwrap_or("")))
+        .collect()
+}
+
+/// Whether only whitespace follows `end` on its line.
+fn eol(src: &str, end: usize) -> bool {
+    let b = src.as_bytes();
+    b[end..fix::line_end(b, end)]
+        .iter()
+        .all(u8::is_ascii_whitespace)
 }
 
 /// Two lines before the comment and eight after, with the comment itself replaced by a marker.

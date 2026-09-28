@@ -35,7 +35,7 @@ Only write a comment when it tells the reader something the code doesn't: why th
 
 ## Machine-readable output
 
-`--reporter json` prints one JSON object. `comments` lists every comment prolix checked. A flagged comment has its category in `group` and a `fix`, which gives the lines to replace (`startLine` to `endLine`, 1-based and inclusive) and their `replacement`. A kept comment has `group: null`. `confidence` is how sure Jev is that the comment is removable at this level, and `probabilities` has Jev's score for each [category](/reference/levels/):
+`--reporter json` prints one JSON object. `comments` lists every comment prolix checked. A flagged comment has its category in `group` and a `fix`, which gives the lines to replace (`startLine` to `endLine`, 1-based and inclusive) and their `replacement`. With [`shorten`](/reference/configuration/#shortening) on, a kept comment Claude can say in fewer words has `group: "wordy"`, and its `fix` puts the shorter wording in place. A kept comment has `group: null`. `confidence` is how sure Jev is that the comment is removable at this level, and `probabilities` has Jev's score for each [category](/reference/levels/):
 
 ```json
 {
@@ -64,7 +64,7 @@ Only write a comment when it tells the reader something the code doesn't: why th
       "fix": null
     }
   ],
-  "stats": { "files": 1, "comments": 2, "flagged": 1, "asked": 2, "cached": 0, "unanswered": 0, "inputTokens": 410, "elapsedMs": 612 }
+  "stats": { "files": 1, "comments": 2, "flagged": 1, "asked": 2, "cached": 0, "unanswered": 0, "inputTokens": 410, "claudeAsked": 0, "claudeCached": 0, "elapsedMs": 612 }
 }
 ```
 

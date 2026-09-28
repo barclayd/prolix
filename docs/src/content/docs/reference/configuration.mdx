@@ -14,7 +14,9 @@ prolix reads `prolix.jsonc`, or `prolix.json`, from the current directory or the
   // How sure Jev must be (0-1) that a comment is removable before flagging it.
   "threshold": 0.6,
   // Globs relative to this file, on top of .gitignore.
-  "ignore": ["vendor/**", "**/*.generated.ts"]
+  "ignore": ["vendor/**", "**/*.generated.ts"],
+  // Rewrite kept comments that could say the same in fewer words.
+  "shorten": true
 }
 ```
 
@@ -23,6 +25,7 @@ prolix reads `prolix.jsonc`, or `prolix.json`, from the current directory or the
 | `level` | `value-add` | `all`, `value-add`, `necessary` or `none`. See [Levels](/reference/levels/). `--level` and the action's `level` input override it. |
 | `threshold` | `0.6` | How sure Jev must be, from 0 to 1, that a comment is removable before it's flagged. Raise it to flag less. |
 | `ignore` | `[]` | Globs to skip, relative to the file, on top of `.gitignore` and `.ignore`. |
+| `shorten` | `false` | Rewrite comments that are kept but could say the same in fewer words, using Claude. See [Shortening](#shortening). |
 
 Unknown settings are an error, so a typo fails loudly rather than being ignored. With `@prolix/cli` installed, `"$schema": "./node_modules/@prolix/cli/configuration_schema.json"` gives editors the schema offline.
 
@@ -33,9 +36,17 @@ Unknown settings are an error, so a typo fails loudly rather than being ignored.
 | `TYPESAFE_API_KEY` | | Needed for `value-add` and `necessary`. Get one from [typesafe.ai](https://typesafe.ai). |
 | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | The Jev API. |
 | `TYPESAFE_DEFAULT_MODEL` | `jev-latest` | The Jev model. |
+| `ANTHROPIC_API_KEY` | | Needed for `shorten`. Without it prolix warns and keeps comments as they are. |
+| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | The Claude API. |
+
+## Shortening
+
+With `"shorten": true`, prolix sends each comment that's kept at `value-add` or `necessary` and runs to 8 words or more to Claude (`claude-opus-5`, with the code around it) and asks for the same comment in fewer words. Facts, warnings, names, numbers, links and tags such as `TODO` stay, and filler goes, along with prefixes that only name the tool that wrote the comment, such as `ponytail:`.
+
+A rewrite is only used when it has fewer words, fewer characters and no more lines than the original, and contains nothing but comments, so it can't add code to the file. Accepted rewrites are flagged as `wordy`: `--fix` swaps them in and the GitHub Action suggests them. It doesn't run at `all` or `none`.
 
 ## Cache
 
-Jev's answers are cached by comment, surrounding code, language and model in `node_modules/.cache/prolix.json`, or in `.prolixcache` when there is no `node_modules`. Re-runs only ask about new or changed comments, and switching levels or thresholds needs no new calls.
+Jev's answers and Claude's rewrites are cached by comment, surrounding code, language and model in `node_modules/.cache/prolix.json`, or in `.prolixcache` when there is no `node_modules`. Re-runs only ask about new or changed comments, and switching levels or thresholds needs no new calls.
 
 Add `.prolixcache` to `.gitignore` in repos without `node_modules`. The cache only grows, so delete it to reset.
