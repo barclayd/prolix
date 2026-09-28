@@ -1,0 +1,13 @@
+/* Colors */
+:root {
+  --brand: #0b5fff; /* brand color */
+  /* 4.5:1 against --surface for WCAG AA; re-check contrast before lightening it */
+  --text-muted: #5b6573;
+}
+
+/* .legacy-banner { display: none; } */
+
+/* Safari before 16 ignores gap on flex containers inside a grid, so margins stand in for it. */
+.toolbar > * + * {
+  margin-left: 8px;
+}

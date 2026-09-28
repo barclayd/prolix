@@ -17,13 +17,14 @@ use std::time::Instant;
 const USAGE: &str = "\
 Find and remove comments that don't earn their place, judged by Jev.
 
-Usage: prolix [paths...] [--fix] [--level <level>]
+Usage: prolix [paths...] [--fix] [--level <level>] [--reporter <reporter>]
 
 Options:
-  --fix             Remove the flagged comments
-  --level <level>   all | value-add | necessary | none   [default: value-add]
-  -h, --help        Print help
-  -V, --version     Print version
+  --fix                    Remove the flagged comments
+  --level <level>          all | value-add | necessary | none   [default: value-add]
+  --reporter <reporter>    text | json   [default: text]
+  -h, --help               Print help
+  -V, --version            Print version
 
 Levels:
   all         keep every comment
@@ -153,6 +154,8 @@ struct Unit {
     line: usize,
     col: usize,
     group: Option<&'static str>,
+    /// Jev's probabilities in `jev::CATS` order, once answered.
+    probs: Option<Vec<f32>>,
     /// Cache key and surrounding code, while the comment awaits Jev.
     ask: Option<(String, String)>,
 }
@@ -167,12 +170,13 @@ fn main() {
 
 fn run() -> Result<i32, String> {
     let t0 = Instant::now();
-    let (mut paths, mut fix, mut level) = (Vec::new(), false, None);
+    let (mut paths, mut fix, mut level, mut reporter) = (Vec::new(), false, None, None);
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--fix" => fix = true,
             "--level" => level = Some(args.next().ok_or("--level needs a value")?),
+            "--reporter" => reporter = Some(args.next().ok_or("--reporter needs a value")?),
             "-h" | "--help" => {
                 print!("{USAGE}");
                 return Ok(0);
@@ -182,10 +186,18 @@ fn run() -> Result<i32, String> {
                 return Ok(0);
             }
             _ if a.starts_with("--level=") => level = Some(a["--level=".len()..].to_string()),
+            _ if a.starts_with("--reporter=") => {
+                reporter = Some(a["--reporter=".len()..].to_string())
+            }
             _ if a.starts_with('-') => return Err(format!("unknown option {a}\n\n{USAGE}")),
             _ => paths.push(a),
         }
     }
+    let json = match reporter.as_deref() {
+        None | Some("text") => false,
+        Some("json") => true,
+        Some(r) => return Err(format!("unknown reporter \"{r}\" (expected text or json)")),
+    };
     let (cfg, root) = config::load()?;
     let level = parse_level(
         level
@@ -258,6 +270,7 @@ fn run() -> Result<i32, String> {
                     Some(p) => {
                         cached += 1;
                         u.group = decide(p, level, threshold);
+                        u.probs = Some(p.clone());
                     }
                     None => pending.push((fi, ui)),
                 }
@@ -294,12 +307,79 @@ fn run() -> Result<i32, String> {
             };
             let p: Vec<f32> = p.iter().map(|x| (x * 1000.0).round() / 1000.0).collect();
             u.group = decide(&p, level, threshold);
-            cache.insert(u.ask.take().unwrap().0, p);
+            cache.insert(u.ask.take().unwrap().0, p.clone());
+            u.probs = Some(p);
         }
         jev::save_cache(&cache_path, &cache);
         if let Some(e) = out.error {
             return Err(e);
         }
+    }
+
+    if unanswered > 0 {
+        eprintln!("prolix: Jev gave no answer for {unanswered} comments; they were kept");
+    }
+    let flagged = |f: &File| -> Vec<(usize, usize)> {
+        f.units
+            .iter()
+            .filter(|u| u.group.is_some())
+            .map(|u| (u.start, u.end))
+            .collect()
+    };
+    if fix {
+        for f in &files {
+            let spans = flagged(f);
+            if !spans.is_empty() {
+                std::fs::write(&f.path, fix::apply(&f.src, &spans, f.lang.jsx))
+                    .map_err(|e| format!("{}: {e}", shown(&f.path)))?;
+            }
+        }
+    }
+    let n = scanned.into_inner();
+    if json {
+        let found: usize = files.iter().map(|f| flagged(f).len()).sum();
+        let round = |x: f32| (f64::from(x) * 1000.0).round() / 1000.0;
+        let comments: Vec<_> = files
+            .iter()
+            .flat_map(|f| {
+                f.units.iter().map(move |u| {
+                    let probs = u.probs.as_ref().map(|p| {
+                        jev::CATS
+                            .iter()
+                            .zip(p)
+                            .map(|(c, &x)| (c.name.to_string(), round(x).into()))
+                            .collect::<serde_json::Map<_, _>>()
+                    });
+                    serde_json::json!({
+                        "path": shown(&f.path),
+                        "line": u.line,
+                        "column": u.col,
+                        "text": &f.src[u.start..u.end],
+                        "group": u.group,
+                        "confidence": u.probs.as_ref().map(|p| round(removable(p, level))),
+                        "probabilities": probs,
+                    })
+                })
+            })
+            .collect();
+        let report = serde_json::json!({
+            "level": LEVELS[level as usize],
+            "threshold": round(threshold),
+            "model": model,
+            "comments": comments,
+            "stats": {
+                "files": n,
+                "comments": checked,
+                "flagged": found,
+                "asked": pending.len(),
+                "cached": cached,
+                "unanswered": unanswered,
+                "inputTokens": tokens,
+                "elapsedMs": t0.elapsed().as_millis() as u64,
+            },
+        });
+        println!("{report}");
+        return Ok(i32::from(found > 0 && !fix));
     }
 
     let color = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
@@ -320,13 +400,12 @@ fn run() -> Result<i32, String> {
         }
         found += spans.len();
         found_files += 1;
-        let path = f.path.strip_prefix(".").unwrap_or(&f.path).display();
         if !fix {
             let _ = writeln!(
                 out,
                 "{}{}",
                 if out.is_empty() { "" } else { "\n" },
-                paint("4", &path.to_string())
+                paint("4", &shown(&f.path))
             );
         }
         let at: Vec<_> = spans
@@ -349,11 +428,6 @@ fn run() -> Result<i32, String> {
                     preview(&f.src[u.start..u.end])
                 );
             }
-        }
-        if fix {
-            let spans: Vec<_> = spans.iter().map(|u| (u.start, u.end)).collect();
-            std::fs::write(&f.path, fix::apply(&f.src, &spans, f.lang.jsx))
-                .map_err(|e| format!("{path}: {e}"))?;
         }
     }
 
@@ -390,7 +464,6 @@ fn run() -> Result<i32, String> {
             let _ = writeln!(out, "\nRun `prolix --fix` to remove them.");
         }
     }
-    let n = scanned.into_inner();
     let mut stats = format!(
         "Checked {checked} comment{} in {n} file{} in {:.2}s",
         s(checked),
@@ -407,9 +480,6 @@ fn run() -> Result<i32, String> {
     }
     let _ = writeln!(out, "{}", paint("2", &stats));
     print!("{out}");
-    if unanswered > 0 {
-        eprintln!("prolix: Jev gave no answer for {unanswered} comments; they were kept");
-    }
     Ok(i32::from(found > 0 && !fix))
 }
 
@@ -495,6 +565,7 @@ fn units(src: &str, lang: &lex::Lang, level: u8, model: &str) -> Vec<Unit> {
                 line: line + 1,
                 col: src[ls..start].chars().count() + 1,
                 group,
+                probs: None,
                 ask,
             }
         })
@@ -512,14 +583,30 @@ fn is_directive(text: &str, start: usize) -> bool {
         || DIRECTIVE_PREFIXES.iter().any(|d| body.starts_with(d))
 }
 
+/// Probability that the comment belongs to a category this level removes.
+fn removable(p: &[f32], level: u8) -> f32 {
+    jev::CATS
+        .iter()
+        .zip(p)
+        .filter(|(c, _)| c.level <= level)
+        .map(|(_, &x)| x)
+        .sum()
+}
+
 fn decide(p: &[f32], level: u8, threshold: f32) -> Option<&'static str> {
-    let removable = || jev::CATS.iter().zip(p).filter(|(c, _)| c.level <= level);
-    if removable().map(|(_, &x)| x).sum::<f32>() < threshold {
+    if removable(p, level) < threshold {
         return None;
     }
-    removable()
+    jev::CATS
+        .iter()
+        .zip(p)
+        .filter(|(c, _)| c.level <= level)
         .max_by(|a, b| a.1.total_cmp(b.1))
         .map(|(c, _)| c.name)
+}
+
+fn shown(path: &Path) -> String {
+    path.strip_prefix(".").unwrap_or(path).display().to_string()
 }
 
 /// Two lines before the comment and eight after, with the comment itself replaced by a marker.

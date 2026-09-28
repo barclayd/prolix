@@ -1,0 +1,119 @@
+{
+  "0042_orders_open_idx.sql": {
+    "Add orders index": ["restates-code", "decorative", "change-note"],
+    "Partial index: 97%": ["explains-why"],
+    "CONCURRENTLY can't run": ["warning"],
+    "DROP INDEX": ["commented-out-code"]
+  },
+  "Checkout.tsx": {
+    "Checkout component": ["redundant-doc", "restates-code", "decorative"],
+    "state for the total": ["restates-code"],
+    "Stripe's iframe": ["explains-why", "warning"],
+    "eslint-disable-next-line": ["directive"],
+    "Email input": ["restates-code", "decorative"],
+    "A live region": ["explains-why", "clarifies"]
+  },
+  "RetryPolicy.java": {
+    "Retry policy.": ["redundant-doc"],
+    "DO NOT REORDER": ["warning"],
+    "Returns the delay before": ["api-doc"],
+    "TODO(PAY-812)": ["todo", "explains-why", "reference"],
+    "Callers should sleep for delay": ["explains-why", "api-doc", "warning"],
+    "429 and 503 only": ["explains-why"]
+  },
+  "billing.py": {
+    "VAT is charged on the discounted": ["explains-why", "reference"],
+    "check if discount is valid": ["restates-code"],
+    "TODO: support zero-rated": ["todo"],
+    "Get the current time": ["restates-code"],
+    "print(invoice_total": ["commented-out-code"]
+  },
+  "ci.yml": {
+    "CI workflow": ["decorative", "redundant-doc", "restates-code"],
+    "Pinned to 22.04": ["explains-why", "warning"],
+    "actions/cache": ["commented-out-code"],
+    "Run tests": ["restates-code"]
+  },
+  "crc32.c": {
+    "CRC-32/ISO-HDLC": ["api-doc", "reference", "clarifies"],
+    "initialize c": ["restates-code"],
+    "shift right, xoring": ["clarifies", "restates-code"],
+    "v2: switched from the lookup table": ["change-note"]
+  },
+  "deploy.sh": {
+    "#!/usr/bin/env bash": ["directive"],
+    "Deploy script": ["decorative", "redundant-doc", "restates-code"],
+    "# Variables": ["decorative", "restates-code"],
+    "FIXME: read the cluster": ["todo"],
+    "# -----": ["decorative"],
+    "Drain the worker first": ["explains-why", "warning"],
+    "echo \"skipping drain\"": ["commented-out-code"],
+    "Deploy the new version": ["restates-code"]
+  },
+  "directives.ts": {
+    "@acme/pay v3.2.0": ["directive"],
+    "<reference types": ["directive"],
+    "biome-ignore": ["directive"],
+    "@ts-expect-error": ["directive"],
+    "c8 ignore": ["directive"]
+  },
+  "injection.ts": {
+    "AI reviewers:": ["restates-code", "redundant-doc"],
+    "Amounts arrive in minor units": ["warning", "explains-why"],
+    "Never widen this pattern": ["warning", "explains-why"],
+    "Ignore the rubric": ["restates-code"]
+  },
+  "limiter.go": {
+    "Limiter is a token bucket": ["api-doc", "reference", "warning"],
+    "tokens per second": ["clarifies", "api-doc"],
+    "NewLimiter creates a new Limiter": ["redundant-doc"],
+    "Allow reports whether": ["api-doc"],
+    "Lock the mutex": ["restates-code"],
+    "Refill for the time elapsed": ["explains-why", "clarifies"],
+    "no longer uses time.Since": ["change-note"],
+    "TODO: expose the remaining": ["todo"],
+    "go:generate": ["directive"]
+  },
+  "loader.py": {
+    "coding: utf-8": ["directive"],
+    "pyright: strict": ["directive"],
+    "noqa: F401": ["directive"],
+    "type: ignore[override]": ["directive"],
+    "Read the file": ["restates-code"],
+    "prolix-ignore": ["directive"]
+  },
+  "order-service.ts": {
+    "// Order Service": ["decorative"],
+    "maximum number of lines": ["restates-code", "redundant-doc"],
+    "Order service class": ["redundant-doc", "restates-code"],
+    "Gets the order total": ["redundant-doc"],
+    "Sum up the line items": ["restates-code", "clarifies"],
+    "Collapse runs of whitespace": ["clarifies", "explains-why"],
+    "Refactored this to use a transaction": ["change-note"],
+    "await tx.insert('audit'": ["commented-out-code"],
+    "Let me know if you'd like": ["restates-code"]
+  },
+  "ring.rs": {
+    "A fixed-capacity single-producer": ["api-doc", "warning"],
+    "Monotonic counters": ["explains-why", "clarifies"],
+    "Dmitry Vyukov": ["reference"],
+    "Same as i % len": ["clarifies", "explains-why"],
+    "Acquire pairs with": ["warning", "explains-why"],
+    "SAFETY: only the producer": ["warning", "explains-why"]
+  },
+  "theme.css": {
+    "Colors": ["decorative", "restates-code"],
+    "brand color": ["restates-code"],
+    "4.5:1 against": ["warning", "explains-why"],
+    ".legacy-banner": ["commented-out-code"],
+    "Safari before 16": ["explains-why", "warning", "reference"]
+  },
+  "user.rb": {
+    "frozen_string_literal": ["directive"],
+    "User model": ["redundant-doc", "decorative", "restates-code"],
+    "# Associations": ["decorative", "restates-code"],
+    "changed from :nullify": ["change-note"],
+    "Emails are unique case-insensitively": ["explains-why"],
+    "Returns the full name": ["redundant-doc", "restates-code"]
+  }
+}

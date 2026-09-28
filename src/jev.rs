@@ -12,7 +12,7 @@ pub struct Cat {
     pub level: u8,
     what: &'static str,
     not_for: Option<&'static str>,
-    examples: &'static [&'static str],
+    pub examples: &'static [&'static str],
 }
 
 pub const CATS: [Cat; 11] = [
