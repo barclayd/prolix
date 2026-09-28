@@ -1,0 +1,80 @@
+---
+title: GitHub Action
+description: Inputs, outputs and behaviour of barclayd/prolix, the GitHub Action that reviews the comments a pull request adds.
+---
+
+`barclayd/prolix@v0` runs prolix on the lines a pull request adds. When it flags something, it posts a summary comment and a one-click suggestion to remove each flagged comment. Later runs update the same summary comment, which turns to ✅ once the pull request is clean. They don't repeat suggestions, and they delete ones that no longer apply.
+
+```yaml title=".github/workflows/prolix.yml"
+name: prolix
+on: pull_request
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  prolix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - uses: barclayd/prolix@v0
+        with:
+          api-key: ${{ secrets.TYPESAFE_API_KEY }}
+```
+
+## Inputs
+
+| Input | Default | |
+| --- | --- | --- |
+| `api-key` | | Typesafe API key, from a secret. When it's empty the check is skipped with a notice, because GitHub doesn't pass secrets to pull requests from forks or Dependabot. |
+| `level` | `prolix.jsonc`, then `value-add` | `all`, `value-add`, `necessary` or `none`. See [Levels](/reference/levels/). |
+| `scope` | `changed` | `changed` checks comments on the lines the pull request adds. `full` checks the whole repository. Events other than pull requests always check the whole repository. |
+| `comment` | `true` | Post a summary comment when something is flagged, and keep it up to date. |
+| `suggestions` | `true` | Post a review suggestion that removes each flagged comment. Needs `scope: changed` and the checkout described below. |
+| `fail-on-findings` | `false` | Fail the job when anything is flagged, instead of only advising. |
+| `version` | `latest` | The `@prolix/cli` version to run, such as `0.1.0` or a canary version. |
+
+## Outputs
+
+| Output | |
+| --- | --- |
+| `flagged` | How many comments were flagged. |
+
+The Markdown summary also goes to the run page.
+
+## Checkout
+
+`ref: ${{ github.event.pull_request.head.sha }}` and `fetch-depth: 0` check out the pull request's own commits rather than GitHub's merge commit, so suggestion line numbers match the pull request. Without them the action still posts the summary comment, and warns that it skipped the suggestions.
+
+## Permissions
+
+The job needs `pull-requests: write` to comment and suggest. Without it the action warns and carries on.
+
+## Behaviour
+
+- Exit code 2 from prolix, such as a bad config or Jev being unreachable, fails the step. Findings only fail it with `fail-on-findings: true`.
+- Each run posts at most 50 new suggestions. The summary comment lists everything flagged.
+- The summary comment is created only once something is flagged, so clean pull requests stay quiet.
+
+## Examples
+
+Block merging on findings, at a stricter level:
+
+```yaml
+- uses: barclayd/prolix@v0
+  with:
+    api-key: ${{ secrets.TYPESAFE_API_KEY }}
+    level: necessary
+    fail-on-findings: true
+```
+
+Try a canary build from a pull request to prolix:
+
+```yaml
+- uses: barclayd/prolix@v0
+  with:
+    api-key: ${{ secrets.TYPESAFE_API_KEY }}
+    version: 0.1.1-canary-abc1234
+```

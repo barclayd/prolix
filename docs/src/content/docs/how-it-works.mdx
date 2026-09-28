@@ -1,0 +1,36 @@
+---
+title: How it works
+description: How prolix finds comments, how Jev judges them, how the judgements are measured, and prolix's known limits.
+---
+
+1. **Find.** A byte-level lexer finds every comment in the files it walks, in [50 languages](/reference/cli/#languages). It knows each language's strings, heredocs and nested comments, so text that only looks like a comment is left alone.
+2. **Skip directives.** Tool and compiler directives, licences and `prolix-ignore` comments are kept without asking Jev. See [Directives](/reference/levels/#directives).
+3. **Judge.** Each remaining comment goes to [Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev) with a few lines of the code around it. Jev scores it against eleven [categories](/reference/levels/#categories). prolix sends up to 32 comments per request and up to 16 requests at a time, and retries rate limits and server errors with backoff.
+4. **Decide.** A comment is flagged when the scores of the categories its level removes add up to the threshold.
+5. **Fix.** `--fix` removes each flagged comment, the line it was on if nothing else was, and the blank-line gap it leaves.
+
+## Evals
+
+`tests/evals` in the repository measures Jev's judgements end to end. It runs the release binary against 15 fixtures in TypeScript, TSX, Rust, Python, Go, Java, C, Ruby, shell, SQL, CSS and YAML. Every comment in them is labelled with the categories a careful reviewer would accept. The fixtures cover every category, plus harder cases:
+
+- warnings dressed as banners
+- TODOs that also explain why
+- prose that quotes code
+- prompt-injection comments
+- directives, which must never reach Jev
+
+The report gives removal precision, which is the gate, because deleting a useful comment is the costly mistake. It also gives recall, the flip rate between repeated runs, a threshold sweep, per-category accuracy, top confusions and every wrong decision. `policy.json` pins a hash of the dataset and sets the floors, so changing a label or a floor is a reviewed change.
+
+```sh
+export TYPESAFE_API_KEY=...
+cargo test --release --test evals -- --ignored --nocapture
+```
+
+## Known limits
+
+- Comment-like text inside JSX (for example `<p>a // b</p>`) is guarded for `//` but not for `/*`.
+- `{/* */}` comments in Svelte and Astro templates aren't linted.
+- C++ raw strings (`R"(...)"`) aren't recognised.
+- The cache only grows. Delete it to reset.
+
+Found another? [Open an issue](https://github.com/barclayd/prolix/issues).

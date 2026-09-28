@@ -1,0 +1,69 @@
+---
+title: prolix
+description: A linter for comments that don't earn their place. It finds comments that restate the code, commented-out code, banners, change notes and signature-only docs, and removes them.
+template: splash
+hero:
+  title: Comments that earn their place
+  tagline: prolix finds the comments that restate the code, disabled code, banners, change notes and signature-only docs that LLM-written code is full of, and removes them. Jev decides which comments to keep.
+  actions:
+    - text: Set up with your agent
+      link: /setup/
+      icon: right-arrow
+      variant: primary
+    - text: Clean up an existing repo
+      link: /adopt/
+      variant: secondary
+    - text: View on GitHub
+      link: https://github.com/barclayd/prolix
+      icon: external
+      variant: minimal
+---
+
+import { CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+## Hand this to your agent
+
+Paste this into Claude Code, Codex, Cursor or any coding agent that works in your repo:
+
+```text wrap
+Read https://prolix.barclayd.workers.dev/setup.md, then set up prolix in this repo by following it. Run the commands yourself, open a pull request, and tell me when I need to add the TYPESAFE_API_KEY secret.
+```
+
+The agent adds a GitHub workflow that reviews the comments every pull request adds, plus a `prolix.jsonc`. [Read the setup guide →](/setup/)
+
+## What it catches
+
+```text
+$ npx @prolix/cli
+src/client.ts
+  12:3   restates-code       // create the client
+  40:1   commented-out-code  // const old = retry(req);
+  57:26  change-note         // Updated to use the new API
+
+Found 3 comments in 1 file (level: value-add):
+
+      1  restates-code       repeats what the code already says
+      1  commented-out-code  disabled code left behind
+      1  change-note         narrates an edit instead of the code as it is
+
+Run `prolix --fix` to remove them.
+Checked 214 comments in 38 files in 0.61s · Jev: 214 asked, 0 cached, 41k tokens
+```
+
+Comments that explain why, warn about a pitfall, document an API or link to a source are kept. Linter and compiler directives are never touched.
+
+## Try it
+
+```sh
+export TYPESAFE_API_KEY=...   # from typesafe.ai
+npx @prolix/cli
+```
+
+## Next
+
+<CardGrid>
+  <LinkCard title="Set up" description="Check the comments every pull request adds, with one-click suggestions to remove them." href="/setup/" />
+  <LinkCard title="Clean up an existing repo" description="Remove the comments already in a repo, one reviewable pull request at a time." href="/adopt/" />
+  <LinkCard title="Use with coding agents" description="Have your agent check its own comments before it hands work back." href="/agents/" />
+  <LinkCard title="Levels and categories" description="What each level keeps and removes." href="/reference/levels/" />
+</CardGrid>

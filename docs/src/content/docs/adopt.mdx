@@ -1,0 +1,64 @@
+---
+title: Clean up an existing repo
+description: Remove the comments already in a repo that don't earn their place, in pull requests small enough to review.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+<Aside type="tip" title="Hand this page to your agent">
+Paste this into your coding agent once `TYPESAFE_API_KEY` is set in its shell:
+
+```text wrap
+Read https://prolix.barclayd.workers.dev/adopt.md, then clear the existing comment backlog in this repo by following it. Tell me how many comments the first run will check before you start, and stop if TYPESAFE_API_KEY isn't set.
+```
+</Aside>
+
+The GitHub Action only checks the lines a pull request adds, so turning it on never flags the comments already in a repo. Clear those separately, once, in pull requests that are easy to review.
+
+## Steps
+
+<Steps>
+
+1. **Set up the workflow first**, as in [Set up](/setup/). From then on, new comments are checked as they arrive, so the backlog only shrinks.
+
+2. **Count the comments.** `--level none` flags every comment except directives and licences without asking Jev, so its stats show how many comments a real run would send:
+
+   ```sh
+   npx @prolix/cli --level none --reporter json | jq .stats
+   ```
+
+   Jev reads about 200 input tokens per comment. Re-runs only ask about new or changed comments, because answers are cached.
+
+3. **Remove the backlog at `value-add`.** It removes only comments that restate the code, disabled code, banners, change notes and signature-only docs:
+
+   ```sh
+   npx @prolix/cli --level value-add --fix
+   ```
+
+   In a large repo, fix a directory at a time so each pull request stays reviewable:
+
+   ```sh
+   npx @prolix/cli src/components --level value-add --fix
+   ```
+
+4. **Review the diff** like any other. `--fix` removes each comment, the line it was on if nothing else was, and the blank-line gap it leaves. To keep a comment it removed, restore it and add `prolix-ignore` to it:
+
+   ```ts
+   // Pinned to 3.x until the upstream fix ships. prolix-ignore
+   ```
+
+5. **Run the build and tests**, then open a pull request.
+
+6. **For a stricter bar**, set `"level": "necessary"` in `prolix.jsonc` and run `--fix` again in a separate pull request. It also removes TODOs and comments that only summarise what code does, keeping the ones that explain why, warn, document an API or link to a source.
+
+</Steps>
+
+<Aside type="note" title="Agents">
+- Open one pull request per directory you fix, and keep each one to comment removals only.
+- Don't fix the same files at a stricter level in the same pull request.
+- If a removal changes behaviour, for example because a comment held a directive prolix didn't recognise, restore it, add `prolix-ignore`, and mention it in the pull request description.
+</Aside>
+
+## Config files
+
+In YAML, TOML, HCL, JSONC, Dockerfiles, Makefiles and CMake, comments often label a section or keep a switched-off setting on hand. prolix keeps `restates-code`, `decorative` and `commented-out-code` comments in those files until `necessary`, so the `value-add` pass leaves them alone.

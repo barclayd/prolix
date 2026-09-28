@@ -1,0 +1,20 @@
+{
+  "name": "@prolix/docs",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "deploy": "astro build && wrangler deploy"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "0.42.4",
+    "astro": "7.3.5",
+    "sharp": "^0.34.5",
+    "starlight-page-actions": "0.7.1"
+  },
+  "devDependencies": {
+    "wrangler": "4.143.0"
+  }
+}

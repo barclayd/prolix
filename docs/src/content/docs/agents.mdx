@@ -1,0 +1,75 @@
+---
+title: Use with coding agents
+description: Have your coding agent check its own comments with prolix before it hands work back, and read these docs as Markdown.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="tip" title="Hand this page to your agent">
+```text wrap
+Read https://prolix.barclayd.workers.dev/agents.md, then add the prolix instructions it describes to this repo's agent instructions file (AGENTS.md, CLAUDE.md or whichever this repo uses).
+```
+</Aside>
+
+Coding agents write most of the comments prolix removes. Ask yours to run prolix on its own changes before it finishes, so the comments never reach review.
+
+## Agent instructions
+
+Add this to `AGENTS.md`, `CLAUDE.md`, `.cursor/rules` or wherever your agent reads its instructions:
+
+```md title="AGENTS.md"
+## Comments
+
+Only write a comment when it tells the reader something the code doesn't: why the code is this way, a warning, API behaviour or a link to a source. Before you finish a change, run `npx @prolix/cli --changed --fix` and check the diff. If it removed a comment that should stay, restore it and add `prolix-ignore` to it.
+```
+
+`--changed` compares with `HEAD`, including uncommitted edits and untracked files, and only asks Jev about comments on added lines. It needs `TYPESAFE_API_KEY` in the agent's environment. prolix exits 2 with a message when it's missing, and the agent should tell you rather than work around it.
+
+## Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| 0 | nothing flagged, or `--fix` succeeded |
+| 1 | comments flagged |
+| 2 | error: bad config, missing key or Jev unreachable |
+
+## Machine-readable output
+
+`--reporter json` prints one JSON object. `comments` lists every comment prolix checked. A flagged comment has its category in `group` and a `fix`, which gives the lines to replace (`startLine` to `endLine`, 1-based and inclusive) and their `replacement`. A kept comment has `group: null`. `confidence` is how sure Jev is that the comment is removable at this level, and `probabilities` has Jev's score for each [category](/reference/levels/):
+
+```json
+{
+  "level": "value-add",
+  "threshold": 0.6,
+  "model": "jev-latest",
+  "comments": [
+    {
+      "path": "src/a.ts",
+      "line": 1,
+      "column": 14,
+      "text": "// set a",
+      "group": "restates-code",
+      "confidence": 0.93,
+      "probabilities": { "restates-code": 0.93, "clarifies": 0.05, "...": 0 },
+      "fix": { "startLine": 1, "endLine": 1, "replacement": "const a = 1;" }
+    },
+    {
+      "path": "src/a.ts",
+      "line": 3,
+      "column": 1,
+      "text": "// Retry once: the upstream drops the first request after idle",
+      "group": null,
+      "confidence": 0.02,
+      "probabilities": { "explains-why": 0.96, "...": 0 },
+      "fix": null
+    }
+  ],
+  "stats": { "files": 1, "comments": 2, "flagged": 1, "asked": 2, "cached": 0, "unanswered": 0, "inputTokens": 410, "elapsedMs": 612 }
+}
+```
+
+`--reporter markdown` prints a summary for a pull request comment or job summary.
+
+## These docs as Markdown
+
+Every page is also served as Markdown: add `.md` to its URL, as in [`/setup.md`](https://prolix.barclayd.workers.dev/setup.md). [`/llms.txt`](https://prolix.barclayd.workers.dev/llms.txt) lists every page. Each page's title also has a button to copy it as Markdown or open it in ChatGPT, Claude or Cursor.

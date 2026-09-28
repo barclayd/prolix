@@ -1,0 +1,12 @@
+/* Yellow, to match the action's Marketplace branding. */
+:root {
+  --sl-color-accent-low: hsl(45, 60%, 14%);
+  --sl-color-accent: hsl(45, 90%, 50%);
+  --sl-color-accent-high: hsl(45, 95%, 80%);
+}
+
+:root[data-theme='light'] {
+  --sl-color-accent-low: hsl(45, 90%, 88%);
+  --sl-color-accent: hsl(40, 90%, 36%);
+  --sl-color-accent-high: hsl(35, 80%, 20%);
+}
