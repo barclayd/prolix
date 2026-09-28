@@ -78,7 +78,7 @@ When this is set up, prolix runs on every pull request. It checks only the lines
    gh secret set TYPESAFE_API_KEY
    ```
 
-   `gh` prompts for the value, so the key never appears in your shell history. Without the secret the check is skipped with a notice, as it is on pull requests from forks and Dependabot, which don't get secrets.
+   `gh` prompts for the value, so the key never appears in your shell history. Without the secret, the pull request gets a comment that links to the repository's Actions secrets. Pull requests from forks and Dependabot don't get secrets, so for those the check is skipped with a notice.
 
    **Agents:** don't ask for the key or handle it yourself. Tell the user to run `gh secret set TYPESAFE_API_KEY`. If `gh secret list` already shows it, skip this step.
 
