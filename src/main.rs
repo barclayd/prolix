@@ -18,27 +18,26 @@ use std::time::Instant;
 const USAGE: &str = "\
 Find and remove comments that don't earn their place, judged by Jev.
 
-Usage: prolix [paths...] [--fix] [--changed[=<ref>]] [--level <level>] [--reporter <reporter>]
+Usage: prolix [paths...] [--fix] [--changed[=<ref>]] [--mode <mode>] [--reporter <reporter>]
 
 Options:
   --fix                    Remove the flagged comments
   --changed[=<ref>]        Only check comments on lines added since <ref>   [default: HEAD]
-  --level <level>          all | value-add | necessary | none   [default: value-add]
+  --mode <mode>            off | standard | strict   [default: standard]
   --reporter <reporter>    text | json | markdown   [default: text]
   -h, --help               Print help
   -V, --version            Print version
 
-Levels:
-  all         keep every comment
-  value-add   keep comments that tell the reader something the code doesn't
-  necessary   keep only intent, warnings, API docs and references
-  none        remove every comment except tool directives and licences
+Modes:
+  off        keep every comment that no rule removes
+  standard   remove comments that restate the code, disabled code, banners, change notes and signature-only docs
+  strict     also remove TODOs and comments that only summarise what code does
 
-Settings are read from prolix.jsonc in this directory or a parent.
-value-add and necessary need TYPESAFE_API_KEY.
+Settings, including keep and remove rules in plain English, are read from prolix.jsonc in this directory or a parent.
+Asking Jev needs TYPESAFE_API_KEY.
 ";
 
-const LEVELS: [&str; 4] = ["all", "value-add", "necessary", "none"];
+const MODES: [&str; 3] = ["off", "standard", "strict"];
 const MAX_FILE: u64 = 1 << 20;
 const MAX_COMMENT: usize = 2000;
 /// Findings listed in a Markdown report, which keeps a PR comment under GitHub's 65k-character limit.
@@ -109,7 +108,7 @@ fn main() {
 
 fn run() -> Result<i32, String> {
     let t0 = Instant::now();
-    let (mut paths, mut fix, mut level, mut reporter) = (Vec::new(), false, None, None);
+    let (mut paths, mut fix, mut mode, mut reporter) = (Vec::new(), false, None, None);
     let mut changed = None;
     // The same run with --fix, for the hint after the findings.
     let mut again = String::new();
@@ -121,9 +120,12 @@ fn run() -> Result<i32, String> {
         match a.as_str() {
             "--fix" => fix = true,
             "--changed" => changed = Some("HEAD".to_string()),
-            "--level" => {
-                level = Some(args.next().ok_or("--level needs a value")?);
-                again = again + " " + level.as_deref().unwrap();
+            "--mode" | "--level" => {
+                if a == "--level" {
+                    eprintln!("prolix: --level is deprecated; use --mode");
+                }
+                mode = Some(args.next().ok_or(format!("{a} needs a value"))?);
+                again = again + " " + mode.as_deref().unwrap();
             }
             "--reporter" => reporter = Some(args.next().ok_or("--reporter needs a value")?),
             "-h" | "--help" => {
@@ -134,7 +136,11 @@ fn run() -> Result<i32, String> {
                 println!("prolix {}", env!("CARGO_PKG_VERSION"));
                 return Ok(0);
             }
-            _ if a.starts_with("--level=") => level = Some(a["--level=".len()..].to_string()),
+            _ if a.starts_with("--mode=") => mode = Some(a["--mode=".len()..].to_string()),
+            _ if a.starts_with("--level=") => {
+                eprintln!("prolix: --level is deprecated; use --mode");
+                mode = Some(a["--level=".len()..].to_string())
+            }
             _ if a.starts_with("--reporter=") => {
                 reporter = Some(a["--reporter=".len()..].to_string())
             }
@@ -150,15 +156,19 @@ fn run() -> Result<i32, String> {
         ));
     }
     let (cfg, root) = config::load()?;
-    let level = parse_level(
-        level
-            .as_deref()
+    if cfg.level.is_some() {
+        eprintln!("prolix: the \"level\" setting is deprecated; use \"mode\"");
+    }
+    let mode = parse_mode(
+        mode.as_deref()
+            .or(cfg.mode.as_deref())
             .or(cfg.level.as_deref())
-            .unwrap_or("value-add"),
+            .unwrap_or("standard"),
     )?;
+    let policy = Policy::new(mode, &cfg.keep, &cfg.remove);
     let threshold = cfg.threshold.unwrap_or(0.6);
     let added = match changed.as_deref() {
-        Some(base) if level > 0 => {
+        Some(base) => {
             if let Some(p) = paths.iter().find(|p| !Path::new(p).exists()) {
                 return Err(format!(
                     "{p}: no such file or directory (to compare with a ref, use --changed=<ref>)"
@@ -168,10 +178,8 @@ fn run() -> Result<i32, String> {
         }
         _ => None,
     };
-    // Level "all" keeps every comment, so there is nothing to read.
     let targets: Vec<String> = match &added {
         Some(a) => a.keys().cloned().collect(),
-        None if level == 0 => Vec::new(),
         None if paths.is_empty() => vec![".".into()],
         None => paths,
     };
@@ -206,7 +214,7 @@ fn run() -> Result<i32, String> {
                 match entry {
                     Ok(e) if e.depth() == 0 && ignored(&ov, e.path(), false) => {}
                     Ok(e) => {
-                        if let Some(f) = read(e, level, &model, &scanned) {
+                        if let Some(f) = read(e, &policy, &model, &scanned) {
                             files.lock().unwrap().push(f);
                         }
                     }
@@ -246,7 +254,7 @@ fn run() -> Result<i32, String> {
                 match cache.get(key) {
                     Some(p) => {
                         cached += 1;
-                        u.group = decide(p, level, threshold, f.lang.config());
+                        u.group = policy.decide(p, threshold, f.lang.config());
                         u.probs = Some(p.clone());
                     }
                     None => pending.push((fi, ui)),
@@ -258,11 +266,12 @@ fn run() -> Result<i32, String> {
     let (mut tokens, mut unanswered) = (0, 0);
     if !pending.is_empty() {
         let key = std::env::var("TYPESAFE_API_KEY").ok().filter(|k| !k.is_empty()).ok_or_else(|| {
-            format!("TYPESAFE_API_KEY is not set; it's needed to judge {} comments (or pass --level none)", pending.len())
+            format!("TYPESAFE_API_KEY is not set; it's needed to judge {} comments (or pass --mode off)", pending.len())
         })?;
         if std::io::stderr().is_terminal() {
             eprintln!("Asking Jev about {} comments…", pending.len());
         }
+        let criteria = jev::criteria(&policy.rules);
         let questions: Vec<_> = pending
             .iter()
             .map(|&(fi, ui)| {
@@ -271,10 +280,11 @@ fn run() -> Result<i32, String> {
                     head(&f.src[u.start..u.end], MAX_COMMENT),
                     &u.ask.as_ref().unwrap().1,
                     f.lang.name,
+                    &criteria,
                 )
             })
             .collect();
-        let out = jev::classify(&questions, &key);
+        let out = jev::classify(&questions, &policy.names, &key);
         tokens = out.tokens;
         for (&(fi, ui), p) in pending.iter().zip(out.probs) {
             let config = files[fi].lang.config();
@@ -284,7 +294,7 @@ fn run() -> Result<i32, String> {
                 continue;
             };
             let p: Vec<f32> = p.iter().map(|x| (x * 1000.0).round() / 1000.0).collect();
-            u.group = decide(&p, level, threshold, config);
+            u.group = policy.decide(&p, threshold, config);
             cache.insert(u.ask.take().unwrap().0, p.clone());
             u.probs = Some(p);
         }
@@ -317,15 +327,17 @@ fn run() -> Result<i32, String> {
     if reporter == "json" {
         let found: usize = files.iter().map(|f| flagged(f).len()).sum();
         let round = |x: f32| (f64::from(x) * 1000.0).round() / 1000.0;
+        let policy = &policy;
         let comments: Vec<_> = files
             .iter()
             .flat_map(|f| {
                 f.units.iter().map(move |u| {
                     let probs = u.probs.as_ref().map(|p| {
-                        jev::CATS
+                        policy
+                            .names
                             .iter()
                             .zip(p)
-                            .map(|(c, &x)| (c.name.to_string(), round(x).into()))
+                            .map(|(n, &x)| (n.to_string(), round(x).into()))
                             .collect::<serde_json::Map<_, _>>()
                     });
                     serde_json::json!({
@@ -334,7 +346,8 @@ fn run() -> Result<i32, String> {
                         "column": u.col,
                         "text": &f.src[u.start..u.end],
                         "group": u.group,
-                        "confidence": u.probs.as_ref().map(|p| round(removable(p, level, f.lang.config()))),
+                        "rule": u.group.and_then(|g| policy.rule(g)),
+                        "confidence": u.probs.as_ref().map(|p| round(policy.removable(p, f.lang.config()))),
                         "probabilities": probs,
                         "fix": u.group.map(|_| {
                             let (a, b, r) = fix::suggestion(&f.src, (u.start, u.end), f.lang.jsx);
@@ -345,7 +358,7 @@ fn run() -> Result<i32, String> {
             })
             .collect();
         let report = serde_json::json!({
-            "level": LEVELS[level as usize],
+            "mode": MODES[mode as usize],
             "threshold": round(threshold),
             "model": model,
             "comments": comments,
@@ -417,14 +430,16 @@ fn run() -> Result<i32, String> {
         }
     }
 
-    let lvl = LEVELS[level as usize];
+    let mode = MODES[mode as usize];
     let s = |n: usize| if n == 1 { "" } else { "s" };
     groups.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
     let what = |g: &str| {
         jev::CATS
             .iter()
             .find(|c| c.name == g)
-            .map_or("any comment that isn't a directive", |c| c.summary)
+            .map(|c| c.summary)
+            .or_else(|| policy.rule(g))
+            .unwrap_or_default()
     };
     let mut stats = format!(
         "Checked {checked} comment{} in {n} file{} in {:.2}s",
@@ -432,7 +447,7 @@ fn run() -> Result<i32, String> {
         s(n),
         t0.elapsed().as_secs_f64()
     );
-    if checked > 0 && level < 3 {
+    if !pending.is_empty() || cached > 0 {
         let _ = write!(
             stats,
             " · Jev: {} asked, {cached} cached, {}k tokens",
@@ -444,13 +459,13 @@ fn run() -> Result<i32, String> {
     if md {
         let mut m = String::new();
         if found == 0 {
-            let _ = writeln!(m, "### ✅ prolix: no comments to remove (level: {lvl})");
+            let _ = writeln!(m, "### ✅ prolix: no comments to remove (mode: {mode})");
         } else {
             let did = if fix { "removed" } else { "found" };
             let rest = if fix { "" } else { " to remove" };
             let _ = writeln!(
                 m,
-                "### prolix {did} {found} comment{}{rest} (level: {lvl})\n",
+                "### prolix {did} {found} comment{}{rest} (mode: {mode})\n",
                 s(found)
             );
             m.push_str("| Count | Category | Description |\n| --: | --- | --- |\n");
@@ -479,7 +494,7 @@ fn run() -> Result<i32, String> {
     if found == 0 {
         let _ = writeln!(
             out,
-            "{} No comments to remove (level: {lvl}).",
+            "{} No comments to remove (mode: {mode}).",
             paint("32", "✓")
         );
     } else {
@@ -487,7 +502,7 @@ fn run() -> Result<i32, String> {
         let gap = if out.is_empty() { "" } else { "\n" };
         let _ = writeln!(
             out,
-            "{gap}{verb} {found} comment{} in {found_files} file{} (level: {lvl}):\n",
+            "{gap}{verb} {found} comment{} in {found_files} file{} (mode: {mode}):\n",
             s(found),
             s(found_files)
         );
@@ -514,29 +529,39 @@ fn code(s: &str) -> String {
     format!("{fence} {s} {fence}")
 }
 
-fn parse_level(s: &str) -> Result<u8, String> {
+/// A mode's index in `MODES`, also accepting the names the modes had as levels.
+fn parse_mode(s: &str) -> Result<u8, String> {
     let k: String = s
         .chars()
         .filter(char::is_ascii_alphanumeric)
         .collect::<String>()
         .to_ascii_lowercase();
-    ["all", "valueadd", "necessary", "none"]
+    let old = match k.as_str() {
+        "all" => Some(0),
+        "valueadd" => Some(1),
+        "necessary" => Some(2),
+        "none" => return Err("mode \"none\" was removed; to remove every comment, set \"mode\": \"strict\" and \"remove\": [\"explains-why\", \"warning\", \"api-doc\", \"reference\"] in prolix.jsonc".into()),
+        _ => None,
+    };
+    if let Some(m) = old {
+        eprintln!("prolix: \"{s}\" is deprecated; use \"{}\"", MODES[m]);
+        return Ok(m as u8);
+    }
+    MODES
         .iter()
-        .position(|&l| l == k)
+        .position(|&m| m == k)
         .map(|p| p as u8)
-        .ok_or_else(|| {
-            format!("unknown level \"{s}\" (expected all, value-add, necessary or none)")
-        })
+        .ok_or_else(|| format!("unknown mode \"{s}\" (expected off, standard or strict)"))
 }
 
-fn read(e: ignore::DirEntry, level: u8, model: &str, scanned: &AtomicUsize) -> Option<File> {
+fn read(e: ignore::DirEntry, policy: &Policy, model: &str, scanned: &AtomicUsize) -> Option<File> {
     let lang = lex::lang_for(e.path())?;
     if !e.file_type()?.is_file() || e.metadata().ok()?.len() > MAX_FILE {
         return None;
     }
     let src = std::fs::read_to_string(e.path()).ok()?;
     scanned.fetch_add(1, Relaxed);
-    let units = units(&src, lang, level, model);
+    let units = units(&src, lang, policy, model);
     (!units.is_empty()).then(|| File {
         path: e.into_path(),
         src,
@@ -546,7 +571,7 @@ fn read(e: ignore::DirEntry, level: u8, model: &str, scanned: &AtomicUsize) -> O
 }
 
 /// Comments worth judging, with runs of whole-line comments merged into one.
-fn units(src: &str, lang: &lex::Lang, level: u8, model: &str) -> Vec<Unit> {
+fn units(src: &str, lang: &lex::Lang, policy: &Policy, model: &str) -> Vec<Unit> {
     let b = src.as_bytes();
     let mut raws = Vec::new();
     lex::scan(b, lang, 0, &mut raws);
@@ -574,6 +599,8 @@ fn units(src: &str, lang: &lex::Lang, level: u8, model: &str) -> Vec<Unit> {
     if spans.is_empty() {
         return Vec::new();
     }
+    // With nothing to remove, as in mode "off" without remove rules, comments are only counted.
+    let judge = policy.removes.iter().flatten().any(|&r| r);
     let newlines: Vec<usize> = b
         .iter()
         .enumerate()
@@ -587,17 +614,17 @@ fn units(src: &str, lang: &lex::Lang, level: u8, model: &str) -> Vec<Unit> {
             let line = newlines.partition_point(|&p| p < start);
             let ls = if line == 0 { 0 } else { newlines[line - 1] + 1 };
             let (group, ask) = if !text.chars().any(char::is_alphanumeric) {
-                let decorative = &jev::CATS[2];
-                (
-                    (jev::level(decorative, lang.config()) <= level).then_some(decorative.name),
-                    None,
-                )
-            } else if level == 3 {
-                (Some("comment"), None)
+                let decorative = policy.removes[usize::from(lang.config())][2];
+                (decorative.then_some(jev::CATS[2].name), None)
+            } else if !judge {
+                (None, None)
             } else {
                 let code = context(src, start, end);
-                let key = jev::hash(&[model, jev::PROMPT_VERSION, lang.name, text, &code]);
-                (None, Some((format!("{key:016x}"), code)))
+                let mut parts = vec![model, jev::PROMPT_VERSION, lang.name, text, &code];
+                if !policy.key.is_empty() {
+                    parts.push(&policy.key);
+                }
+                (None, Some((format!("{:016x}", jev::hash(&parts)), code)))
             };
             Unit {
                 start,
@@ -730,26 +757,86 @@ fn directive_line(l: &str, inline: bool) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || ".-+".contains(c))
 }
 
-/// Probability that the comment belongs to a category this level removes.
-fn removable(p: &[f32], level: u8, config: bool) -> f32 {
-    jev::CATS
-        .iter()
-        .zip(p)
-        .filter(|(c, _)| jev::level(c, config) <= level)
-        .map(|(_, &x)| x)
-        .sum()
+/// The criteria Jev chooses between, and which of them the mode and the `keep` and `remove` lists remove.
+struct Policy {
+    /// `jev::CATS`, then each plain-English rule, in the order of Jev's probabilities.
+    names: Vec<&'static str>,
+    /// Plain-English rules as (name, text): `keep-1`, `keep-2`, …, then `remove-1`, ….
+    rules: Vec<(&'static str, &'static str)>,
+    /// Which of `names` are removed, in code and then in configuration files.
+    removes: [Vec<bool>; 2],
+    /// Joins every cache key when there are rules, since they change the question.
+    key: String,
 }
 
-fn decide(p: &[f32], level: u8, threshold: f32, config: bool) -> Option<&'static str> {
-    if removable(p, level, config) < threshold {
-        return None;
+impl Policy {
+    fn new(mode: u8, keep: &[String], remove: &[String]) -> Policy {
+        let listed = |list: &[String], name: &str| list.iter().any(|r| r == name);
+        let mut rules = Vec::new();
+        for (verb, list) in [("keep", keep), ("remove", remove)] {
+            let english = list
+                .iter()
+                .filter(|r| !jev::CATS.iter().any(|c| c.name == *r));
+            for (i, r) in english.enumerate() {
+                // Leaked once per run, so rules can name groups like the built-in categories.
+                let name: &'static str = format!("{verb}-{}", i + 1).leak();
+                rules.push((name, &*r.clone().leak()));
+            }
+        }
+        let removes = [false, true].map(|config| {
+            jev::CATS
+                .iter()
+                .map(|c| {
+                    !listed(keep, c.name)
+                        && (jev::mode(c, config) <= mode || listed(remove, c.name))
+                })
+                .chain(rules.iter().map(|r| r.0.starts_with("remove")))
+                .collect()
+        });
+        let parts: Vec<&str> = rules.iter().flat_map(|&(n, t)| [n, t]).collect();
+        Policy {
+            names: jev::CATS
+                .iter()
+                .map(|c| c.name)
+                .chain(rules.iter().map(|r| r.0))
+                .collect(),
+            key: if rules.is_empty() {
+                String::new()
+            } else {
+                format!("{:016x}", jev::hash(&parts))
+            },
+            rules,
+            removes,
+        }
     }
-    jev::CATS
-        .iter()
-        .zip(p)
-        .filter(|(c, _)| jev::level(c, config) <= level)
-        .max_by(|a, b| a.1.total_cmp(b.1))
-        .map(|(c, _)| c.name)
+
+    /// Probability that the comment is one this run removes.
+    fn removable(&self, p: &[f32], config: bool) -> f32 {
+        self.removes[usize::from(config)]
+            .iter()
+            .zip(p)
+            .filter(|(&r, _)| r)
+            .map(|(_, &x)| x)
+            .sum()
+    }
+
+    fn decide(&self, p: &[f32], threshold: f32, config: bool) -> Option<&'static str> {
+        if self.removable(p, config) < threshold {
+            return None;
+        }
+        self.names
+            .iter()
+            .zip(&self.removes[usize::from(config)])
+            .zip(p)
+            .filter(|((_, &r), _)| r)
+            .max_by(|a, b| a.1.total_cmp(b.1))
+            .map(|((&n, _), _)| n)
+    }
+
+    /// The text of the rule a group is named after.
+    fn rule(&self, group: &str) -> Option<&'static str> {
+        self.rules.iter().find(|r| r.0 == group).map(|r| r.1)
+    }
 }
 
 fn shown(path: &Path) -> String {
@@ -884,7 +971,7 @@ mod tests {
             assert!(!is_directive(p, false), "{p}");
         }
         let src = "a\n// one\n// two\n// eslint-disable-next-line\n// three\nb // four\n// ----\n";
-        let u = units(src, &lex::TS, 1, "m");
+        let u = units(src, &lex::TS, &Policy::new(1, &[], &[]), "m");
         let texts: Vec<_> = u.iter().map(|u| &src[u.start..u.end]).collect();
         assert_eq!(texts, ["// one\n// two", "// three", "// four", "// ----"]);
         assert_eq!(
@@ -894,15 +981,39 @@ mod tests {
     }
 
     #[test]
-    fn decide_by_level() {
+    fn decide_by_mode_and_rules() {
+        let (standard, strict) = (Policy::new(1, &[], &[]), Policy::new(2, &[], &[]));
         let mut p = vec![0.0; jev::CATS.len()];
         p[0] = 0.4;
         p[6] = 0.5;
-        assert_eq!(decide(&p, 1, 0.6, false), None);
-        assert_eq!(decide(&p, 2, 0.6, false), Some("clarifies"));
+        assert_eq!(standard.decide(&p, 0.6, false), None);
+        assert_eq!(strict.decide(&p, 0.6, false), Some("clarifies"));
         p[0] = 0.9;
-        assert_eq!(decide(&p, 1, 0.6, false), Some("restates-code"));
-        assert_eq!(decide(&p, 1, 0.6, true), None);
-        assert_eq!(parse_level("Value Add"), Ok(1));
+        assert_eq!(standard.decide(&p, 0.6, false), Some("restates-code"));
+        assert_eq!(standard.decide(&p, 0.6, true), None);
+        assert_eq!(parse_mode("Value Add"), Ok(1));
+        assert_eq!(parse_mode("strict"), Ok(2));
+        assert!(parse_mode("none").is_err());
+
+        // Categories named in a list switch on or off; anything else becomes a criterion of its own.
+        let keep = [
+            "clarifies".to_string(),
+            "States a fact the code relies on".to_string(),
+        ];
+        let rules = Policy::new(2, &keep, &["todo".into(), "Reassures a reviewer".into()]);
+        assert_eq!(&rules.names[11..], ["keep-1", "remove-1"]);
+        assert_eq!(rules.rule("remove-1"), Some("Reassures a reviewer"));
+        assert!(!rules.key.is_empty() && strict.key.is_empty());
+        let mut p = vec![0.0; 13];
+        p[6] = 0.5;
+        p[12] = 0.5;
+        assert_eq!(rules.decide(&p, 0.6, false), None);
+        p[6] = 0.3;
+        p[12] = 0.7;
+        assert_eq!(rules.decide(&p, 0.6, false), Some("remove-1"));
+        p[12] = 0.0;
+        p[11] = 0.7;
+        assert_eq!(rules.decide(&p, 0.6, false), None);
+        assert!(Policy::new(0, &[], &["todo".into()]).removes[0][5]);
     }
 }

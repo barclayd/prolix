@@ -1,6 +1,6 @@
 {
   "$schema": "./npm/cli/configuration_schema.json",
-  "level": "value-add",
+  "mode": "standard",
   // Eval fixtures are full of bad comments on purpose.
   "ignore": ["tests/evals/fixtures/**"]
 }

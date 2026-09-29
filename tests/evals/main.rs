@@ -25,14 +25,14 @@ use std::process::Command;
 type Labels = BTreeMap<String, BTreeMap<String, Vec<String>>>;
 
 const DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/evals");
-const LEVELS: [(&str, u8); 2] = [("value-add", 1), ("necessary", 2)];
+const MODES: [(&str, u8); 2] = [("standard", 1), ("strict", 2)];
 const SWEEP: [f64; 5] = [0.4, 0.5, 0.6, 0.7, 0.8];
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Expect {
     Remove,
     Keep,
-    /// The acceptable categories fall on both sides of the level, so either is right.
+    /// The acceptable categories fall on both sides of the mode, so either is right.
     Either,
 }
 
@@ -40,7 +40,7 @@ struct Decision {
     file: String,
     find: String,
     cats: Vec<String>,
-    level: usize,
+    mode: usize,
     expect: Expect,
     flagged: bool,
     confidence: f64,
@@ -80,15 +80,15 @@ fn read(path: impl AsRef<Path>) -> String {
     std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
-fn expect(cats: &[String], level: u8, config: bool) -> Expect {
+fn expect(cats: &[String], mode: u8, config: bool) -> Expect {
     let removed = cats
         .iter()
         .filter(|c| {
             let cat = jev::CATS.iter().find(|k| k.name == c.as_str());
-            jev::level(
+            jev::mode(
                 cat.unwrap_or_else(|| panic!("unknown category {c:?} in cases.json")),
                 config,
-            ) <= level
+            ) <= mode
         })
         .count();
     match removed {
@@ -98,7 +98,7 @@ fn expect(cats: &[String], level: u8, config: bool) -> Expect {
     }
 }
 
-/// Turns one run's reports (one per level) into decisions and returns any contract breaks:
+/// Turns one run's reports (one per mode) into decisions and returns any contract breaks:
 /// a label that doesn't match exactly one comment, a comment nobody labelled, a directive
 /// that reached Jev, or a comment Jev never answered.
 fn grade(
@@ -149,8 +149,8 @@ fn grade(
                 file: file.into(),
                 find: find.clone(),
                 cats: cats.clone(),
-                level: li,
-                expect: expect(cats, LEVELS[li].1, config),
+                mode: li,
+                expect: expect(cats, MODES[li].1, config),
                 flagged,
                 // Comments without letters are flagged locally and have no confidence.
                 confidence: c["confidence"]
@@ -176,10 +176,10 @@ fn score<'a>(ds: impl Iterator<Item = &'a Decision>, flagged: impl Fn(&Decision)
     s
 }
 
-/// Share of comments whose decision at `level` differed between repeats.
-fn flip_rate(ds: &[Decision], level: usize) -> f64 {
+/// Share of comments whose decision in `mode` differed between repeats.
+fn flip_rate(ds: &[Decision], mode: usize) -> f64 {
     let mut seen: BTreeMap<(&str, &str), (bool, bool)> = BTreeMap::new();
-    for d in ds.iter().filter(|d| d.level == level) {
+    for d in ds.iter().filter(|d| d.mode == mode) {
         let e = seen.entry((&d.file, &d.find)).or_default();
         if d.flagged {
             e.0 = true;
@@ -191,7 +191,7 @@ fn flip_rate(ds: &[Decision], level: usize) -> f64 {
 }
 
 /// Runs prolix on one fixture in a fresh directory, so nothing comes from an earlier
-/// cache. The second level reuses the first level's answers from that run's cache.
+/// cache. The second mode reuses the first mode's answers from that run's cache.
 fn run(file: &str, src: &str, repeat: usize) -> Result<Vec<Value>, String> {
     let tmp = std::env::temp_dir().join(format!(
         "prolix-eval-{}-{repeat}-{file}",
@@ -202,11 +202,11 @@ fn run(file: &str, src: &str, repeat: usize) -> Result<Vec<Value>, String> {
     std::fs::write(tmp.join(file), src).map_err(|e| e.to_string())?;
     // Stops the config search from finding a prolix.jsonc above the temp directory.
     std::fs::write(tmp.join("prolix.jsonc"), "{}").map_err(|e| e.to_string())?;
-    let reports = LEVELS
+    let reports = MODES
         .iter()
-        .map(|(level, _)| {
+        .map(|(mode, _)| {
             let out = Command::new(env!("CARGO_BIN_EXE_prolix"))
-                .args(["--reporter", "json", "--level", level])
+                .args(["--reporter", "json", "--mode", mode])
                 .current_dir(&tmp)
                 .output()
                 .map_err(|e| e.to_string())?;
@@ -311,9 +311,9 @@ fn evals() {
         .map(|p| serde_json::from_str(&read(p)).expect("EVAL_BASELINE"));
     let max_drop = policy["maximumBaselineDrop"].as_f64().unwrap_or(0.0);
     let max_flips = policy["maximumFlipRate"].as_f64().unwrap_or(0.0);
-    let mut levels = Map::new();
-    for (li, (name, _)) in LEVELS.iter().enumerate() {
-        let at = || decisions.iter().filter(move |d| d.level == li);
+    let mut modes = Map::new();
+    for (li, (name, _)) in MODES.iter().enumerate() {
+        let at = || decisions.iter().filter(move |d| d.mode == li);
         let s = score(at(), |d| d.flagged);
         let flips = flip_rate(&decisions, li);
         let floor = &policy["floors"][name];
@@ -326,7 +326,7 @@ fn evals() {
             }
             if let Some(was) = baseline
                 .as_ref()
-                .and_then(|b| b["levels"][name][metric].as_f64())
+                .and_then(|b| b["modes"][name][metric].as_f64())
             {
                 if was - value > max_drop {
                     gates.push(format!(
@@ -345,7 +345,7 @@ fn evals() {
                 json!({ "threshold": t, "precision": r3(s.precision()), "recall": r3(s.recall()) })
             })
             .collect();
-        levels.insert(
+        modes.insert(
             name.to_string(),
             json!({
                 "precision": r3(s.precision()), "recall": r3(s.recall()),
@@ -354,24 +354,24 @@ fn evals() {
         );
     }
 
-    // [value-add, necessary, top-1] as (right, total), keyed by each label's first category.
+    // [standard, strict, top-1] as (right, total), keyed by each label's first category.
     let mut cats: BTreeMap<&str, [(usize, usize); 3]> = BTreeMap::new();
     let mut confusions: BTreeMap<(&str, &str), usize> = BTreeMap::new();
     let mut errors: BTreeMap<(usize, bool, &str, &str), (usize, f64)> = BTreeMap::new();
     for d in &decisions {
         let e = cats.entry(&d.cats[0]).or_default();
         if d.expect != Expect::Either {
-            e[d.level].1 += 1;
+            e[d.mode].1 += 1;
             if d.flagged == (d.expect == Expect::Remove) {
-                e[d.level].0 += 1;
+                e[d.mode].0 += 1;
             } else {
                 let err = errors
-                    .entry((d.level, d.flagged, &d.file, &d.find))
+                    .entry((d.mode, d.flagged, &d.file, &d.find))
                     .or_default();
                 *err = (err.0 + 1, err.1.max(d.confidence));
             }
         }
-        if d.level == 0 {
+        if d.mode == 0 {
             e[2].1 += 1;
             if d.cats.contains(&d.top) {
                 e[2].0 += 1;
@@ -405,8 +405,8 @@ fn evals() {
         pct(0.95),
         if dirty { " (dirty)" } else { "" },
     );
-    md += "| Level | Precision | Recall | Wrong removals | Missed | Flip rate |\n| --- | --- | --- | --- | --- | --- |\n";
-    for (name, l) in &levels {
+    md += "| Mode | Precision | Recall | Wrong removals | Missed | Flip rate |\n| --- | --- | --- | --- | --- | --- |\n";
+    for (name, l) in &modes {
         let _ = writeln!(
             md,
             "| {name} | {:.3} | {:.3} | {} | {} | {:.3} |",
@@ -417,17 +417,12 @@ fn evals() {
             l["flipRate"].as_f64().unwrap(),
         );
     }
-    md += "\nThreshold sweep (precision / recall):\n\n| Threshold | value-add | necessary |\n| --- | --- | --- |\n";
+    md += "\nThreshold sweep (precision / recall):\n\n| Threshold | standard | strict |\n| --- | --- | --- |\n";
     for (i, t) in SWEEP.iter().enumerate() {
-        let cell = |name: &str| fmt_pr(&levels[name]["sweep"][i]);
-        let _ = writeln!(
-            md,
-            "| {t} | {} | {} |",
-            cell("value-add"),
-            cell("necessary")
-        );
+        let cell = |name: &str| fmt_pr(&modes[name]["sweep"][i]);
+        let _ = writeln!(md, "| {t} | {} | {} |", cell("standard"), cell("strict"));
     }
-    md += "\n| Category | Judgements | value-add | necessary | Top-1 |\n| --- | --- | --- | --- | --- |\n";
+    md += "\n| Category | Judgements | standard | strict | Top-1 |\n| --- | --- | --- | --- | --- |\n";
     for (c, e) in &cats {
         let cell = |(a, b): (usize, usize)| {
             if b == 0 {
@@ -461,8 +456,8 @@ fn evals() {
     if !errors.is_empty() {
         md += "\nErrors (a wrong removal costs more than a miss):\n\n";
         let mut list: Vec<_> = errors.iter().collect();
-        list.sort_by_key(|((level, removed, ..), _)| (!removed, *level));
-        for ((level, removed, file, find), (n, conf)) in list {
+        list.sort_by_key(|((mode, removed, ..), _)| (!removed, *mode));
+        for ((mode, removed, file, find), (n, conf)) in list {
             let what = if *removed {
                 "removed a keeper"
             } else {
@@ -471,7 +466,7 @@ fn evals() {
             let _ = writeln!(
                 md,
                 "- {} {what}: `{find}` in {file}, {n}/{repeat} runs, confidence ≤ {conf:.2}",
-                LEVELS[*level].0
+                MODES[*mode].0
             );
         }
     }
@@ -493,9 +488,9 @@ fn evals() {
         },
         "gates": { "passed": passed, "failures": gates },
         "usage": { "inputTokens": tokens, "p50Ms": pct(0.5), "p95Ms": pct(0.95) },
-        "levels": levels,
+        "modes": modes,
         "decisions": decisions.iter().map(|d| json!({
-            "file": d.file, "find": d.find, "cats": d.cats, "level": LEVELS[d.level].0,
+            "file": d.file, "find": d.find, "cats": d.cats, "mode": MODES[d.mode].0,
             "expect": format!("{:?}", d.expect), "flagged": d.flagged, "confidence": d.confidence, "top": d.top,
         })).collect::<Vec<_>>(),
     });
@@ -551,9 +546,9 @@ fn grading() {
         &mut ds,
     );
     assert_eq!(problems, ["a.ts: unlabelled comment \"// stray\""]);
-    let va = score(ds.iter().filter(|d| d.level == 0), |d| d.flagged);
+    let va = score(ds.iter().filter(|d| d.mode == 0), |d| d.flagged);
     assert_eq!((va.tp, va.fp, va.fn_), (1, 1, 0));
-    let ne = score(ds.iter().filter(|d| d.level == 1), |d| d.flagged);
+    let ne = score(ds.iter().filter(|d| d.mode == 1), |d| d.flagged);
     assert_eq!((ne.tp, ne.fp, ne.fn_), (0, 0, 2));
     assert_eq!(
         expect(&["todo".into(), "reference".into()], 2, false),

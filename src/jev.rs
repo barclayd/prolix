@@ -8,18 +8,18 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub struct Cat {
     pub name: &'static str,
     pub summary: &'static str,
-    /// Loosest level that removes it: 1 value-add, 2 necessary, 3 none.
-    pub level: u8,
+    /// Loosest mode that removes it: 1 standard, 2 strict, 3 none (only a `remove` rule does).
+    pub mode: u8,
     what: &'static str,
     not_for: Option<&'static str>,
     pub examples: &'static [&'static str],
 }
 
-/// The level that removes `cat`. Configuration keeps section labels and switched-off settings until `necessary`.
-pub fn level(cat: &Cat, config: bool) -> u8 {
+/// The mode that removes `cat`. Configuration keeps section labels and switched-off settings until `strict`.
+pub fn mode(cat: &Cat, config: bool) -> u8 {
     match cat.name {
         "restates-code" | "decorative" | "commented-out-code" if config => 2,
-        _ => cat.level,
+        _ => cat.mode,
     }
 }
 
@@ -27,7 +27,7 @@ pub const CATS: [Cat; 11] = [
     Cat {
         name: "restates-code",
         summary: "repeats what the code already says",
-        level: 1,
+        mode: 1,
         what: "Repeats what the code already says plainly (names, operations, obvious steps), or is conversational filler addressed to a reader, reviewer or user",
         not_for: Some("Summaries that save a reader from working through non-obvious code"),
         examples: &["// increment the counter", "// loop through the users", "# return the result", "// Here we create the client"],
@@ -35,7 +35,7 @@ pub const CATS: [Cat; 11] = [
     Cat {
         name: "commented-out-code",
         summary: "disabled code left behind",
-        level: 1,
+        mode: 1,
         what: "Source code that has been disabled by commenting it out",
         not_for: Some("Prose that quotes a short identifier or usage example"),
         examples: &["// const total = compute(items);", "# print(debug_info)"],
@@ -43,7 +43,7 @@ pub const CATS: [Cat; 11] = [
     Cat {
         name: "decorative",
         summary: "banners, dividers and section labels",
-        level: 1,
+        mode: 1,
         what: "A banner, divider or section heading that only labels a region whose purpose is obvious from the code",
         not_for: None,
         examples: &["// ===== Helpers =====", "/* ---------- */", "// Imports"],
@@ -51,7 +51,7 @@ pub const CATS: [Cat; 11] = [
     Cat {
         name: "change-note",
         summary: "narrates an edit instead of the code as it is",
-        level: 1,
+        mode: 1,
         what: "Describes an edit, fix or earlier version (what was added, changed, removed or updated) rather than the code as it is now",
         not_for: None,
         examples: &["// Updated to use the new API", "// Fixed: was off by one", "// Removed the old cache logic", "// NEW: added retry"],
@@ -59,7 +59,7 @@ pub const CATS: [Cat; 11] = [
     Cat {
         name: "redundant-doc",
         summary: "docs that only repeat the signature",
-        level: 1,
+        mode: 1,
         what: "A documentation comment that only repeats the name, signature or types, adding no behaviour, constraint or edge case",
         not_for: Some("Docs that state behaviour, errors, units or constraints the signature doesn't show"),
         examples: &["/** Gets the user. @param id The id. @returns The user. */", "/// Creates a new Config."],
@@ -67,7 +67,7 @@ pub const CATS: [Cat; 11] = [
     Cat {
         name: "todo",
         summary: "TODO / FIXME notes",
-        level: 2,
+        mode: 2,
         what: "A TODO, FIXME, HACK or note about unfinished or planned work",
         not_for: None,
         examples: &["// TODO: handle pagination", "# FIXME: breaks on empty input"],
@@ -75,7 +75,7 @@ pub const CATS: [Cat; 11] = [
     Cat {
         name: "clarifies",
         summary: "summarises what non-obvious code does",
-        level: 2,
+        mode: 2,
         what: "Summarises or explains what a non-obvious piece of code does, so a reader can follow it faster",
         not_for: Some("Restating a line that is already obvious"),
         examples: &["// Binary search over the sorted offsets", "// Normalise to UTC before bucketing by day"],
@@ -83,7 +83,7 @@ pub const CATS: [Cat; 11] = [
     Cat {
         name: "explains-why",
         summary: "explains intent or trade-offs",
-        level: 3,
+        mode: 3,
         what: "Explains why the code is written this way: intent, trade-off, business rule or rejected alternative that the code cannot express",
         not_for: None,
         examples: &["// Retry once: the upstream drops the first request after idle", "# Sorted descending so the newest wins ties"],
@@ -91,7 +91,7 @@ pub const CATS: [Cat; 11] = [
     Cat {
         name: "warning",
         summary: "warns about pitfalls or invariants",
-        level: 3,
+        mode: 3,
         what: "Warns about a pitfall, invariant, ordering constraint, safety or security requirement, or behaviour that would surprise a maintainer",
         not_for: None,
         examples: &["// Must run before init(); it mutates globals", "// SAFETY: ptr is non-null and aligned", "// Not thread-safe"],
@@ -99,7 +99,7 @@ pub const CATS: [Cat; 11] = [
     Cat {
         name: "api-doc",
         summary: "documents public behaviour",
-        level: 3,
+        mode: 3,
         what: "Documents a public interface's behaviour, parameters, return value, errors or usage beyond what its signature shows",
         not_for: Some("Docs that only restate the name or types"),
         examples: &["/** Returns null when the key has expired; never throws. */", "/// Panics if `n` is zero."],
@@ -107,7 +107,7 @@ pub const CATS: [Cat; 11] = [
     Cat {
         name: "reference",
         summary: "links to issues, specs or sources",
-        level: 3,
+        mode: 3,
         what: "Points to an external source: an issue, spec, RFC, ticket, documentation page or the origin of copied code",
         not_for: None,
         examples: &["// See RFC 7231 section 6.5.1", "// Workaround for https://github.com/org/repo/issues/123"],
@@ -125,8 +125,9 @@ const BATCH_TOKENS: usize = 40_000;
 const WORKERS: usize = 16;
 const ATTEMPTS: u32 = 6;
 
-pub fn question(comment: &str, code: &str, language: &str) -> Value {
-    let criteria: Map<String, Value> = CATS
+/// The categories, then each plain-English rule from `keep` and `remove` as (name, text).
+pub fn criteria(rules: &[(&str, &str)]) -> Map<String, Value> {
+    let mut criteria: Map<String, Value> = CATS
         .iter()
         .map(|c| {
             let mut o = json!({ "what": c.what, "examples": c.examples });
@@ -136,6 +137,13 @@ pub fn question(comment: &str, code: &str, language: &str) -> Value {
             (c.name.to_string(), o)
         })
         .collect();
+    for (name, what) in rules {
+        criteria.insert(name.to_string(), json!({ "what": what }));
+    }
+    criteria
+}
+
+pub fn question(comment: &str, code: &str, language: &str, criteria: &Map<String, Value>) -> Value {
     json!({
         "type": "choice",
         "instructions": {
@@ -158,8 +166,8 @@ pub struct Outcome {
     pub error: Option<String>,
 }
 
-/// Asks Jev every question, batched and in parallel. Answers are probabilities in `CATS` order.
-pub fn classify(qs: &[Value], key: &str) -> Outcome {
+/// Asks Jev every question, batched and in parallel. Answers are probabilities in the order of `names`.
+pub fn classify(qs: &[Value], names: &[&str], key: &str) -> Outcome {
     let base =
         std::env::var("TYPESAFE_BASE_URL").unwrap_or_else(|_| "https://api.typesafe.ai".into());
     let model = model();
@@ -204,7 +212,7 @@ pub fn classify(qs: &[Value], key: &str) -> Outcome {
                         used.fetch_add(v["usage"]["input_tokens"].as_u64().unwrap_or(0), Relaxed);
                         let mut probs = probs.lock().unwrap();
                         for i in batches[b].clone() {
-                            probs[i] = parse(&v["answers"][i.to_string()]);
+                            probs[i] = parse(&v["answers"][i.to_string()], names);
                         }
                     }
                     Err(e) => {
@@ -222,17 +230,18 @@ pub fn classify(qs: &[Value], key: &str) -> Outcome {
     }
 }
 
-fn parse(a: &Value) -> Option<Vec<f32>> {
+fn parse(a: &Value, names: &[&str]) -> Option<Vec<f32>> {
     let probs = a["probabilities"].as_object();
     let choice = a["choice"].as_str();
     if probs.is_none() && choice.is_none() {
         return None;
     }
     Some(
-        CATS.iter()
-            .map(|c| match probs {
-                Some(p) => p.get(c.name).and_then(Value::as_f64).unwrap_or(0.0) as f32,
-                None => f32::from(choice == Some(c.name)),
+        names
+            .iter()
+            .map(|&n| match probs {
+                Some(p) => p.get(n).and_then(Value::as_f64).unwrap_or(0.0) as f32,
+                None => f32::from(choice == Some(n)),
             })
             .collect(),
     )

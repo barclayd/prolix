@@ -9,8 +9,12 @@ inputs:
   api-key:
     description: Typesafe API key for Jev, from a secret. When it's empty, as on pull requests from forks, the check is skipped.
     required: false
+  mode:
+    description: off, standard or strict. Defaults to prolix.jsonc, then standard.
+    default: ""
   level:
-    description: all, value-add, necessary or none. Defaults to prolix.jsonc, then value-add.
+    description: The old name for `mode`.
+    deprecationMessage: Use `mode` instead of `level`.
     default: ""
   scope:
     description: On pull requests, `changed` checks only comments on lines the pull request adds and `full` checks the whole repository. Other events always check the whole repository.
@@ -41,7 +45,7 @@ runs:
       env:
         TYPESAFE_API_KEY: ${{ inputs.api-key }}
         GH_TOKEN: ${{ github.token }}
-        INPUT_LEVEL: ${{ inputs.level }}
+        INPUT_MODE: ${{ inputs.mode || inputs.level }}
         INPUT_SCOPE: ${{ inputs.scope }}
         INPUT_COMMENT: ${{ inputs.comment }}
         INPUT_SUGGESTIONS: ${{ inputs.suggestions }}
@@ -86,7 +90,7 @@ runs:
           sticky 1 || echo "::warning::prolix couldn't post its pull request comment. Does the job have pull-requests: write?"
         }
 
-        if [ -z "$TYPESAFE_API_KEY" ] && [ "$INPUT_LEVEL" != none ]; then
+        if [ -z "$TYPESAFE_API_KEY" ]; then
           # Forks and Dependabot never get secrets, so only a pull request from this repository means the secret is missing.
           if [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ] && [ "$PR_AUTHOR" != 'dependabot[bot]' ]; then
             setup "No Typesafe API key reached this job, so the \`TYPESAFE_API_KEY\` secret is missing or this repository can't see it." "$secrets/new"
@@ -95,7 +99,7 @@ runs:
           exit 0
         fi
         args=()
-        [ -z "$INPUT_LEVEL" ] || args+=("--level=$INPUT_LEVEL")
+        [ -z "$INPUT_MODE" ] || args+=("--mode=$INPUT_MODE")
         changed=false
         if [ -n "$PR" ] && [ "$INPUT_SCOPE" = changed ]; then
           base="origin/$GITHUB_BASE_REF"
@@ -139,7 +143,7 @@ runs:
                 path,
                 line: .fix.endLine,
                 side: "RIGHT",
-                body: ("\($m)\n**prolix**: `\(.group)`. Commit the suggestion to remove it.\n\n```suggestion\n"
+                body: ("\($m)\n**prolix**: `\(.group)`\(if .rule then " (\(.rule))" else "" end). Commit the suggestion to remove it.\n\n```suggestion\n"
                   + (if .fix.replacement == "" then "" else .fix.replacement + "\n" end) + "```")
               } + (if .fix.startLine < .fix.endLine then {start_line: .fix.startLine, start_side: "RIGHT"} else {} end)
             ] as $new

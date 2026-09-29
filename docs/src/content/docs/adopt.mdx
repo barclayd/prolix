@@ -21,24 +21,24 @@ The GitHub Action only checks the lines a pull request adds, so turning it on ne
 
 1. **Set up the workflow first**, as in [Set up](/setup/). From then on, new comments are checked as they arrive, so the backlog only shrinks.
 
-2. **Count the comments.** `--level none` flags every comment except directives and licences without asking Jev, so its stats show how many comments a real run would send:
+2. **Count the comments.** `--mode off` checks without asking Jev, so its stats show how many comments a real run would send:
 
    ```sh
-   npx @prolix/cli --level none --reporter json | jq .stats
+   npx @prolix/cli --mode off --reporter json | jq .stats.comments
    ```
 
    Jev reads about 1,000 input tokens per comment, since it sees the code around each one. Re-runs only ask about new or changed comments, because answers are cached.
 
-3. **Remove the backlog at `value-add`.** It removes only comments that restate the code, disabled code, banners, change notes and signature-only docs:
+3. **Remove the backlog in `standard` mode.** It removes only comments that restate the code, disabled code, banners, change notes and signature-only docs:
 
    ```sh
-   npx @prolix/cli --level value-add --fix
+   npx @prolix/cli --mode standard --fix
    ```
 
    In a large repo, fix a directory at a time so each pull request stays reviewable:
 
    ```sh
-   npx @prolix/cli src/components --level value-add --fix
+   npx @prolix/cli src/components --mode standard --fix
    ```
 
 4. **Review the diff** like any other. `--fix` removes each comment, the line it was on if nothing else was, and the blank-line gap it leaves. To keep a comment it removed, restore it and add `prolix-ignore` to it:
@@ -49,16 +49,16 @@ The GitHub Action only checks the lines a pull request adds, so turning it on ne
 
 5. **Run the build and tests**, then open a pull request.
 
-6. **For a stricter bar**, set `"level": "necessary"` in `prolix.jsonc` and run `--fix` again in a separate pull request. It also removes TODOs and comments that only summarise what code does, keeping the ones that explain why, warn, document an API or link to a source.
+6. **For a stricter bar**, set `"mode": "strict"` in `prolix.jsonc` and run `--fix` again in a separate pull request. It also removes TODOs and comments that only summarise what code does, keeping the ones that explain why, warn, document an API or link to a source.
 
 </Steps>
 
 <Aside type="note" title="Agents">
 - Open one pull request per directory you fix, and keep each one to comment removals only.
-- Don't fix the same files at a stricter level in the same pull request.
+- Don't fix the same files in a stricter mode in the same pull request.
 - If a removal changes behaviour, for example because a comment held a directive prolix didn't recognise, restore it, add `prolix-ignore`, and mention it in the pull request description.
 </Aside>
 
 ## Config files
 
-In YAML, TOML, HCL, JSONC, Dockerfiles, Makefiles and CMake, comments often label a section or keep a switched-off setting on hand. prolix keeps `restates-code`, `decorative` and `commented-out-code` comments in those files until `necessary`, so the `value-add` pass leaves them alone.
+In YAML, TOML, HCL, JSONC, Dockerfiles, Makefiles and CMake, comments often label a section or keep a switched-off setting on hand. prolix keeps `restates-code`, `decorative` and `commented-out-code` comments in those files until `strict`, so the `standard` pass leaves them alone.

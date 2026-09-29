@@ -4,16 +4,31 @@
   "type": "object",
   "properties": {
     "$schema": { "type": "string" },
-    "level": {
-      "description": "Which comments to keep.",
-      "enum": ["all", "value-add", "necessary", "none"],
+    "mode": {
+      "description": "How strict to be about comments. keep and remove rules apply on top.",
+      "enum": ["off", "standard", "strict"],
       "enumDescriptions": [
-        "Keep every comment.",
-        "Keep comments that tell the reader something the code doesn't.",
-        "Keep only intent, warnings, API docs and references.",
-        "Remove every comment except tool directives and licences."
+        "Keep every comment that no remove rule removes.",
+        "Remove comments that restate the code, disabled code, banners, change notes and signature-only docs.",
+        "Also remove TODOs and comments that only summarise what code does."
       ],
-      "default": "value-add"
+      "default": "standard"
+    },
+    "level": {
+      "description": "The old name for mode.",
+      "enum": ["all", "value-add", "necessary"],
+      "deprecated": true,
+      "deprecationMessage": "Use \"mode\" instead: all is off, value-add is standard, necessary is strict."
+    },
+    "keep": {
+      "description": "Comments to keep whatever the mode: category names, or rules in plain English.",
+      "type": "array",
+      "items": { "$ref": "#/definitions/rule" }
+    },
+    "remove": {
+      "description": "Comments to remove whatever the mode: category names, or rules in plain English.",
+      "type": "array",
+      "items": { "$ref": "#/definitions/rule" }
     },
     "threshold": {
       "description": "How sure Jev must be (0 to 1) before a comment is flagged.",
@@ -28,5 +43,27 @@
       "items": { "type": "string" }
     }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "definitions": {
+    "rule": {
+      "anyOf": [
+        {
+          "enum": [
+            "restates-code",
+            "commented-out-code",
+            "decorative",
+            "change-note",
+            "redundant-doc",
+            "todo",
+            "clarifies",
+            "explains-why",
+            "warning",
+            "api-doc",
+            "reference"
+          ]
+        },
+        { "type": "string", "pattern": "\\s", "description": "A rule in plain English." }
+      ]
+    }
+  }
 }

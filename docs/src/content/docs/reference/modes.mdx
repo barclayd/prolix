@@ -1,0 +1,77 @@
+---
+title: Modes and categories
+description: What each prolix mode keeps and removes, the eleven categories Jev sorts comments into, rules in plain English, and the directives prolix never touches.
+---
+
+## Modes
+
+| Mode | Keeps | Removes |
+| --- | --- | --- |
+| `off` | everything | nothing |
+| `standard` (default) | anything that tells the reader something the code doesn't | `restates-code`, `commented-out-code`, `decorative`, `change-note`, `redundant-doc` |
+| `strict` | `explains-why`, `warning`, `api-doc`, `reference` | the above, plus `todo` and `clarifies` |
+
+Set the mode in [`prolix.jsonc`](/reference/configuration/), with `--mode` on the command line, or with the action's `mode` input. The command line and the action input override the file.
+
+The old `level` setting, `--level` and the action's `level` input still work with a warning, as do their values: `all` is `off`, `value-add` is `standard` and `necessary` is `strict`. `none` was removed. To remove every comment Jev can judge, use `strict` with `"remove": ["explains-why", "warning", "api-doc", "reference"]`.
+
+## Rules
+
+`keep` and `remove` adjust a mode for your project. Each entry is either a category name, which switches that category on or off whatever the mode, or a rule in plain English:
+
+```jsonc title="prolix.jsonc"
+{
+  "mode": "strict",
+  "keep": [
+    "todo",
+    "States a fact the code relies on but can't show: what a tool does, where a file is generated, what a limit or constant means"
+  ],
+  "remove": ["Reassures a reviewer that another code path still works, instead of explaining this one"]
+}
+```
+
+Jev scores each comment against every rule alongside the categories, so a comment that fits a rule better than any category is judged by the rule. A comment flagged by a rule is labelled `remove-1`, `remove-2` and so on, in list order, and the JSON report and the action's suggestions quote the rule's text.
+
+Describe what a comment says, not a keyword to match. One sentence works best, with examples after a colon when the idea is broad. A single word must be a category name, so a typo isn't mistaken for a rule. The same entry can't be in both lists.
+
+Adding or changing a rule asks Jev again about every comment, once. Switching modes or thresholds reuses the cached answers.
+
+## Categories
+
+Jev scores each comment against every category. prolix adds up the scores of the categories and `remove` rules the mode removes, leaving out anything in `keep`, and flags the comment when the total reaches the [threshold](/reference/configuration/) (0.6 by default).
+
+| Category | Removed in | What it is | Example |
+| --- | --- | --- | --- |
+| `restates-code` | `standard` | repeats what the code already says, or is filler addressed to a reader | `// increment the counter` |
+| `commented-out-code` | `standard` | disabled code left behind | `// const total = compute(items);` |
+| `decorative` | `standard` | banners, dividers and section labels | `// ===== Helpers =====` |
+| `change-note` | `standard` | narrates an edit instead of describing the code as it is | `// Updated to use the new API` |
+| `redundant-doc` | `standard` | docs that only repeat the name, signature or types | `/// Creates a new Config.` |
+| `todo` | `strict` | TODO, FIXME and HACK notes | `// TODO: handle pagination` |
+| `clarifies` | `strict` | summarises what non-obvious code does | `// Binary search over the sorted offsets` |
+| `explains-why` | only by `remove` | intent, trade-offs and business rules the code can't express | `// Retry once: the upstream drops the first request after idle` |
+| `warning` | only by `remove` | pitfalls, invariants and safety requirements | `// SAFETY: ptr is non-null and aligned` |
+| `api-doc` | only by `remove` | public behaviour beyond what the signature shows | `/// Panics if n is zero.` |
+| `reference` | only by `remove` | links to issues, specs or the source of copied code | `// See RFC 7231 section 6.5.1` |
+
+### Config files
+
+In YAML, TOML, HCL, JSONC, Dockerfiles, Makefiles and CMake, comments often label a section or keep a switched-off setting on hand. In those files `restates-code`, `decorative` and `commented-out-code` are removed only in `strict`.
+
+## Directives
+
+prolix never sends tool and compiler directives to Jev, and never removes them. It recognises them by their shape rather than by a list of tool names, so it also respects a linter it has never heard of:
+
+- a switch word joined to a name or followed by a rule: `eslint-disable-next-line`, `react-doctor-disable-line`, `biome-ignore`, `# hadolint ignore=DL3008`, `/* c8 ignore next */`
+- `no…` markers and `tool:setting` tokens: `# noqa: E501`, `// NOLINTNEXTLINE`, `# rubocop:disable`, `//go:build`, `// gitleaks:allow`
+- tags and settings: `@ts-expect-error`, `$FlowFixMe`, `# shellcheck source=lib.sh`, `# syntax=docker/dockerfile:1`, `/* webpackChunkName: "x" */`
+- version pins beside a hash, as in `uses: actions/checkout@<sha> # v4.1.1`
+- shebangs, pragmas, regions, `/*!` licence headers, copyright and SPDX lines, `@generated` markers and `/// <reference>`
+
+## Keeping a comment
+
+Add `prolix-ignore` anywhere in a comment to keep it in every mode, whatever the rules:
+
+```ts
+// Pinned to 3.x until the upstream fix ships. prolix-ignore
+```

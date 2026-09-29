@@ -35,11 +35,11 @@ Only write a comment when it tells the reader something the code doesn't: why th
 
 ## Machine-readable output
 
-`--reporter json` prints one JSON object. `comments` lists every comment prolix checked. A flagged comment has its category in `group` and a `fix`, which gives the lines to replace (`startLine` to `endLine`, 1-based and inclusive) and their `replacement`. A kept comment has `group: null`. `confidence` is how sure Jev is that the comment is removable at this level, and `probabilities` has Jev's score for each [category](/reference/levels/):
+`--reporter json` prints one JSON object. `comments` lists every comment prolix checked. A flagged comment has its category in `group` and a `fix`, which gives the lines to replace (`startLine` to `endLine`, 1-based and inclusive) and their `replacement`. A kept comment has `group: null`. `confidence` is how sure Jev is that the comment is removable in this mode, and `probabilities` has Jev's score for each [category](/reference/modes/) and rule. A comment flagged by a rule has the rule's text in `rule`:
 
 ```json
 {
-  "level": "value-add",
+  "mode": "standard",
   "threshold": 0.6,
   "model": "jev-latest",
   "comments": [
@@ -49,6 +49,7 @@ Only write a comment when it tells the reader something the code doesn't: why th
       "column": 14,
       "text": "// set a",
       "group": "restates-code",
+      "rule": null,
       "confidence": 0.93,
       "probabilities": { "restates-code": 0.93, "clarifies": 0.05, "...": 0 },
       "fix": { "startLine": 1, "endLine": 1, "replacement": "const a = 1;" }
@@ -59,6 +60,7 @@ Only write a comment when it tells the reader something the code doesn't: why th
       "column": 1,
       "text": "// Retry once: the upstream drops the first request after idle",
       "group": null,
+      "rule": null,
       "confidence": 0.02,
       "probabilities": { "explains-why": 0.96, "...": 0 },
       "fix": null

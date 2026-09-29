@@ -9,6 +9,7 @@ const site = 'https://prolix.barclaysd.workers.dev';
 export default defineConfig({
   site,
   devToolbar: { enabled: false },
+  redirects: { '/reference/levels': '/reference/modes' },
   integrations: [
     starlight({
       title: 'prolix',
@@ -32,7 +33,7 @@ export default defineConfig({
           items: [
             { label: 'GitHub Action', slug: 'reference/action' },
             { label: 'CLI', slug: 'reference/cli' },
-            { label: 'Levels and categories', slug: 'reference/levels' },
+            { label: 'Modes and categories', slug: 'reference/modes' },
             { label: 'Configuration', slug: 'reference/configuration' },
           ],
         },
