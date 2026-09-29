@@ -143,7 +143,7 @@ runs:
                 path,
                 line: .fix.endLine,
                 side: "RIGHT",
-                body: ("\($m)\n**prolix**: `\(.group)`\(if .rule then " (\(.rule))" else "" end). Commit the suggestion to remove it.\n\n```suggestion\n"
+                body: ("\($m)\n**prolix**: `\(.group)`. Commit the suggestion to remove it.\n\n```suggestion\n"
                   + (if .fix.replacement == "" then "" else .fix.replacement + "\n" end) + "```")
               } + (if .fix.startLine < .fix.endLine then {start_line: .fix.startLine, start_side: "RIGHT"} else {} end)
             ] as $new

@@ -10,14 +10,17 @@ pub struct Config {
     /// The old name for `mode`.
     pub level: Option<String>,
     pub threshold: Option<f32>,
-    /// Categories or plain-English rules for comments to keep, whatever the mode.
+    /// Guidance in plain English on how to judge this project's comments, passed to Jev with each one.
+    pub behaviour: Option<String>,
     #[serde(default)]
     pub keep: Vec<String>,
-    /// Categories or plain-English rules for comments to remove, whatever the mode.
     #[serde(default)]
     pub remove: Vec<String>,
     #[serde(default)]
     pub ignore: Vec<String>,
+    /// Set when `keep` or `remove` held plain-English rules, which are now part of `behaviour`.
+    #[serde(skip)]
+    pub rules_moved: bool,
 }
 
 /// Finds `prolix.jsonc` (or `prolix.json`) in the current directory or a parent; returns it with its directory.
@@ -60,7 +63,7 @@ fn parse(text: &str) -> Result<Config, String> {
         }
         i += 1;
     }
-    let cfg: Config = serde_json::from_slice(&b).map_err(|e| e.to_string())?;
+    let mut cfg: Config = serde_json::from_slice(&b).map_err(|e| e.to_string())?;
     if cfg.threshold.is_some_and(|t| !(0.0..=1.0).contains(&t)) {
         return Err("threshold must be between 0 and 1".into());
     }
@@ -72,7 +75,7 @@ fn parse(text: &str) -> Result<Config, String> {
             {
                 let names: Vec<_> = crate::jev::CATS.iter().map(|c| c.name).collect();
                 return Err(format!(
-                    "{key}: unknown category \"{r}\" (expected {}, or a rule in plain English)",
+                    "{key}: unknown category \"{r}\" (expected {})",
                     names.join(", ")
                 ));
             }
@@ -81,6 +84,28 @@ fn parse(text: &str) -> Result<Config, String> {
     if let Some(r) = cfg.keep.iter().find(|r| cfg.remove.contains(r)) {
         return Err(format!("\"{r}\" is in both keep and remove"));
     }
+    // Rules in plain English came before `behaviour`, which now says the same thing to Jev.
+    let mut moved = Vec::new();
+    for (verb, list) in [("Keep", &mut cfg.keep), ("Remove", &mut cfg.remove)] {
+        list.retain(|r| {
+            let cat = crate::jev::CATS.iter().any(|c| c.name == r);
+            if !cat {
+                moved.push(format!(
+                    "{verb} any comment that fits this description: {}.",
+                    r.trim().trim_end_matches('.')
+                ));
+            }
+            cat
+        });
+    }
+    cfg.rules_moved = !moved.is_empty();
+    cfg.behaviour = cfg
+        .behaviour
+        .iter()
+        .map(|b| b.trim().to_string())
+        .chain(moved)
+        .filter(|b| !b.is_empty())
+        .reduce(|a, b| a + " " + &b);
     Ok(cfg)
 }
 
@@ -93,8 +118,22 @@ mod tests {
         )
         .unwrap();
         assert_eq!(c.mode.as_deref(), Some("strict"));
-        assert_eq!(c.keep, ["todo", "Names a tool"]);
+        assert_eq!(c.keep, ["todo"]);
         assert_eq!(c.ignore, ["a//b"]);
+        assert_eq!(
+            c.behaviour.as_deref(),
+            Some("Keep any comment that fits this description: Names a tool.")
+        );
+        let c = super::parse(r#"{"behaviour": " Keep jokes. ", "remove": ["Is rude."]}"#).unwrap();
+        assert_eq!(
+            c.behaviour.as_deref(),
+            Some("Keep jokes. Remove any comment that fits this description: Is rude.")
+        );
+        assert!(c.remove.is_empty() && c.rules_moved);
+        assert_eq!(
+            super::parse(r#"{"behaviour": " "}"#).unwrap().behaviour,
+            None
+        );
         assert!(
             super::parse(r#"{"keep": ["todos"]}"#).is_err_and(|e| e.contains("unknown category"))
         );

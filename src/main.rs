@@ -29,11 +29,11 @@ Options:
   -V, --version            Print version
 
 Modes:
-  off        keep every comment that no rule removes
+  off        keep every comment unless remove names its category
   standard   remove comments that restate the code, disabled code, banners, change notes and signature-only docs
   strict     also remove TODOs and comments that only summarise what code does
 
-Settings, including keep and remove rules in plain English, are read from prolix.jsonc in this directory or a parent.
+Settings, including a behaviour in plain English, are read from prolix.jsonc in this directory or a parent.
 Asking Jev needs TYPESAFE_API_KEY.
 ";
 
@@ -92,10 +92,10 @@ struct Unit {
     line: usize,
     col: usize,
     group: Option<&'static str>,
-    /// Jev's probabilities in `Policy::names` order, once answered.
+    /// Jev's probabilities in `jev::CATS` order, once answered.
     probs: Option<Vec<f32>>,
-    /// Cache keys (the categories' question, then each rule's) and surrounding code, while the comment awaits Jev.
-    ask: Option<(Vec<String>, String)>,
+    /// Cache key and surrounding code, while the comment awaits Jev.
+    ask: Option<(String, String)>,
 }
 
 fn main() {
@@ -159,13 +159,16 @@ fn run() -> Result<i32, String> {
     if cfg.level.is_some() {
         eprintln!("prolix: the \"level\" setting is deprecated; use \"mode\"");
     }
+    if cfg.rules_moved {
+        eprintln!("prolix: plain-English rules in \"keep\" and \"remove\" are deprecated; they're read as part of \"behaviour\", so move them there");
+    }
     let mode = parse_mode(
         mode.as_deref()
             .or(cfg.mode.as_deref())
             .or(cfg.level.as_deref())
             .unwrap_or("standard"),
     )?;
-    let policy = Policy::new(mode, &cfg.keep, &cfg.remove);
+    let policy = Policy::new(mode, &cfg.keep, &cfg.remove, cfg.behaviour.clone());
     let threshold = cfg.threshold.unwrap_or(0.6);
     let added = match changed.as_deref() {
         Some(base) => {
@@ -245,20 +248,20 @@ fn run() -> Result<i32, String> {
         root.join(".prolixcache")
     };
     let mut cache = jev::load_cache(&cache_path);
-    // Each comment is one question about the categories, then one per rule, and any of them may be cached.
     let mut pending = Vec::new();
-    let (mut checked, mut asked, mut judged) = (0, 0, 0);
+    let (mut checked, mut judged) = (0, 0);
     for (fi, f) in files.iter().enumerate() {
         for (ui, u) in f.units.iter().enumerate() {
             checked += 1;
-            if let Some((keys, _)) = &u.ask {
-                let before = pending.len();
-                pending.extend((0..keys.len()).filter(|&q| !cache.contains_key(&keys[q])).map(|q| (fi, ui, q)));
+            if let Some((key, _)) = &u.ask {
                 judged += 1;
-                asked += usize::from(pending.len() > before);
+                if !cache.contains_key(key) {
+                    pending.push((fi, ui));
+                }
             }
         }
     }
+    let asked = pending.len();
     let cached = judged - asked;
 
     let (mut tokens, mut unanswered) = (0, 0);
@@ -272,25 +275,28 @@ fn run() -> Result<i32, String> {
         let criteria = jev::criteria();
         let questions: Vec<_> = pending
             .iter()
-            .map(|&(fi, ui, q)| {
+            .map(|&(fi, ui)| {
                 let (f, u) = (&files[fi], &files[fi].units[ui]);
-                let (comment, code) = (head(&f.src[u.start..u.end], MAX_COMMENT), &u.ask.as_ref().unwrap().1);
-                match q {
-                    0 => jev::question(comment, code, f.lang.name, &criteria),
-                    _ => jev::rule_question(comment, code, f.lang.name, policy.rules[q - 1].1),
-                }
+                let (comment, code) = (
+                    head(&f.src[u.start..u.end], MAX_COMMENT),
+                    &u.ask.as_ref().unwrap().1,
+                );
+                jev::question(
+                    comment,
+                    code,
+                    f.lang.name,
+                    policy.behaviour.as_deref(),
+                    &criteria,
+                )
             })
             .collect();
-        let mut names = policy.names[..jev::CATS.len()].to_vec();
-        names.push("rule");
+        let names: Vec<_> = jev::CATS.iter().map(|c| c.name).collect();
         let out = jev::classify(&questions, &names, &key);
         tokens = out.tokens;
-        for (&(fi, ui, q), p) in pending.iter().zip(out.probs) {
+        for (&(fi, ui), p) in pending.iter().zip(out.probs) {
             if let Some(p) = p {
-                // The categories' question keeps their probabilities, and a rule's question only the rule's.
-                let p = if q == 0 { &p[..jev::CATS.len()] } else { &p[jev::CATS.len()..] };
                 let p = p.iter().map(|x| (x * 1000.0).round() / 1000.0).collect();
-                cache.insert(files[fi].units[ui].ask.as_ref().unwrap().0[q].clone(), p);
+                cache.insert(files[fi].units[ui].ask.as_ref().unwrap().0.clone(), p);
             }
         }
         jev::save_cache(&cache_path, &cache);
@@ -301,16 +307,13 @@ fn run() -> Result<i32, String> {
     for f in &mut files {
         let config = f.lang.config();
         for u in &mut f.units {
-            let Some((keys, _)) = u.ask.take() else { continue };
-            // The categories' probabilities, then each rule's probability of fitting.
-            let p = keys.iter().try_fold(Vec::new(), |mut p, k| {
-                p.extend(cache.get(k)?);
-                Some(p)
-            });
-            match p {
+            let Some((key, _)) = u.ask.take() else {
+                continue;
+            };
+            match cache.get(&key) {
                 Some(p) => {
-                    u.group = policy.decide(&p, threshold, config);
-                    u.probs = Some(p);
+                    u.group = policy.decide(p, threshold, config);
+                    u.probs = Some(p.clone());
                 }
                 None => unanswered += 1,
             }
@@ -346,11 +349,10 @@ fn run() -> Result<i32, String> {
             .flat_map(|f| {
                 f.units.iter().map(move |u| {
                     let probs = u.probs.as_ref().map(|p| {
-                        policy
-                            .names
+                        jev::CATS
                             .iter()
                             .zip(p)
-                            .map(|(n, &x)| (n.to_string(), round(x).into()))
+                            .map(|(c, &x)| (c.name.to_string(), round(x).into()))
                             .collect::<serde_json::Map<_, _>>()
                     });
                     serde_json::json!({
@@ -359,7 +361,6 @@ fn run() -> Result<i32, String> {
                         "column": u.col,
                         "text": &f.src[u.start..u.end],
                         "group": u.group,
-                        "rule": u.group.and_then(|g| policy.rule(g)),
                         "confidence": u.probs.as_ref().map(|p| round(policy.removable(p, f.lang.config()))),
                         "probabilities": probs,
                         "fix": u.group.map(|_| {
@@ -451,7 +452,6 @@ fn run() -> Result<i32, String> {
             .iter()
             .find(|c| c.name == g)
             .map(|c| c.summary)
-            .or_else(|| policy.rule(g))
             .unwrap_or_default()
     };
     let mut stats = format!(
@@ -611,7 +611,7 @@ fn units(src: &str, lang: &lex::Lang, policy: &Policy, model: &str) -> Vec<Unit>
     if spans.is_empty() {
         return Vec::new();
     }
-    // With nothing to remove, as in mode "off" without remove rules, comments are only counted.
+    // With nothing to remove, as in mode "off" with an empty `remove`, comments are only counted.
     let judge = policy.removes.iter().flatten().any(|&r| r);
     let newlines: Vec<usize> = b
         .iter()
@@ -632,13 +632,9 @@ fn units(src: &str, lang: &lex::Lang, policy: &Policy, model: &str) -> Vec<Unit>
                 (None, None)
             } else {
                 let code = context(src, start, end);
-                let parts = [model, jev::PROMPT_VERSION, lang.name, text, &code];
-                // A rule's question is keyed by its text, so changing one rule asks again only about that rule.
-                let keys = std::iter::once(jev::hash(&parts))
-                    .chain(policy.rules.iter().map(|r| jev::hash(&[&parts[..], &[r.1]].concat())))
-                    .map(|h| format!("{h:016x}"))
-                    .collect();
-                (None, Some((keys, code)))
+                let mut parts = vec![model, jev::PROMPT_VERSION, lang.name, text, &code];
+                parts.extend(policy.behaviour.as_deref());
+                (None, Some((format!("{:016x}", jev::hash(&parts)), code)))
             };
             Unit {
                 start,
@@ -771,30 +767,16 @@ fn directive_line(l: &str, inline: bool) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || ".-+".contains(c))
 }
 
-/// The categories and rules Jev is asked about, and which of them the mode and the `keep` and `remove` lists remove.
+/// Which categories the mode and the `keep` and `remove` lists remove, and the behaviour Jev judges comments by.
 struct Policy {
-    /// `jev::CATS`, then each plain-English rule, in the order of Jev's probabilities.
-    names: Vec<&'static str>,
-    /// Plain-English rules as (name, text): `keep-1`, `keep-2`, …, then `remove-1`, ….
-    rules: Vec<(&'static str, &'static str)>,
-    /// Which of `names` are removed, in code and then in configuration files.
+    /// Which of `jev::CATS` are removed, in code and then in configuration files.
     removes: [Vec<bool>; 2],
+    behaviour: Option<String>,
 }
 
 impl Policy {
-    fn new(mode: u8, keep: &[String], remove: &[String]) -> Policy {
+    fn new(mode: u8, keep: &[String], remove: &[String], behaviour: Option<String>) -> Policy {
         let listed = |list: &[String], name: &str| list.iter().any(|r| r == name);
-        let mut rules = Vec::new();
-        for (verb, list) in [("keep", keep), ("remove", remove)] {
-            let english = list
-                .iter()
-                .filter(|r| !jev::CATS.iter().any(|c| c.name == *r));
-            for (i, r) in english.enumerate() {
-                // Leaked once per run, so rules can name groups like the built-in categories.
-                let name: &'static str = format!("{verb}-{}", i + 1).leak();
-                rules.push((name, &*r.clone().leak()));
-            }
-        }
         let removes = [false, true].map(|config| {
             jev::CATS
                 .iter()
@@ -802,68 +784,32 @@ impl Policy {
                     !listed(keep, c.name)
                         && (jev::mode(c, config) <= mode || listed(remove, c.name))
                 })
-                .chain(rules.iter().map(|r| r.0.starts_with("remove")))
                 .collect()
         });
-        Policy {
-            names: jev::CATS
-                .iter()
-                .map(|c| c.name)
-                .chain(rules.iter().map(|r| r.0))
-                .collect(),
-            rules,
-            removes,
-        }
+        Policy { removes, behaviour }
     }
 
-    /// The removed categories' total probability, and the likeliest `keep` and `remove` rules as (index, probability).
-    fn split(&self, p: &[f32], config: bool) -> (f32, (usize, f32), (usize, f32)) {
-        let removes = &self.removes[usize::from(config)];
-        let n = jev::CATS.len();
-        let cats = (0..n).filter(|&i| removes[i]).map(|i| p[i]).sum();
-        let top = |remove: bool| {
-            (n..p.len())
-                .filter(|&i| removes[i] == remove)
-                .map(|i| (i, p[i]))
-                .fold((0, 0.0), |a, b| if b.1 > a.1 { b } else { a })
-        };
-        (cats, top(false), top(true))
-    }
-
-    /// Probability that the comment is one this run removes: that it fits a removed category or any `remove` rule,
-    /// each rule being its own question, unless a `keep` rule likely fits it.
+    /// Probability that the comment fits a category this run removes.
     fn removable(&self, p: &[f32], config: bool) -> f32 {
-        let removes = &self.removes[usize::from(config)];
-        let (cats, keep, _) = self.split(p, config);
-        let kept = (jev::CATS.len()..p.len())
-            .filter(|&i| removes[i])
-            .fold(1.0 - cats, |k, i| k * (1.0 - p[i]));
-        (1.0 - keep.1).min(1.0 - kept)
+        p.iter()
+            .zip(&self.removes[usize::from(config)])
+            .filter(|(_, &r)| r)
+            .map(|(x, _)| x)
+            .sum()
     }
 
-    /// Labelled with the `remove` rule when it's likelier than the removed categories together, and otherwise with
-    /// the likeliest removed category.
+    /// The likeliest removed category, once the removed categories together reach `threshold`.
     fn decide(&self, p: &[f32], threshold: f32, config: bool) -> Option<&'static str> {
         if self.removable(p, config) < threshold {
             return None;
         }
-        let (cats, _, remove) = self.split(p, config);
-        if remove.1 >= cats {
-            return Some(self.names[remove.0]);
-        }
-        self.names
+        jev::CATS
             .iter()
             .zip(&self.removes[usize::from(config)])
             .zip(p)
-            .take(jev::CATS.len())
             .filter(|((_, &r), _)| r)
             .max_by(|a, b| a.1.total_cmp(b.1))
-            .map(|((&n, _), _)| n)
-    }
-
-    /// The text of the rule a group is named after.
-    fn rule(&self, group: &str) -> Option<&'static str> {
-        self.rules.iter().find(|r| r.0 == group).map(|r| r.1)
+            .map(|((c, _), _)| c.name)
     }
 }
 
@@ -999,7 +945,7 @@ mod tests {
             assert!(!is_directive(p, false), "{p}");
         }
         let src = "a\n// one\n// two\n// eslint-disable-next-line\n// three\nb // four\n// ----\n";
-        let u = units(src, &lex::TS, &Policy::new(1, &[], &[]), "m");
+        let u = units(src, &lex::TS, &Policy::new(1, &[], &[], None), "m");
         let texts: Vec<_> = u.iter().map(|u| &src[u.start..u.end]).collect();
         assert_eq!(texts, ["// one\n// two", "// three", "// four", "// ----"]);
         assert_eq!(
@@ -1009,8 +955,11 @@ mod tests {
     }
 
     #[test]
-    fn decide_by_mode_and_rules() {
-        let (standard, strict) = (Policy::new(1, &[], &[]), Policy::new(2, &[], &[]));
+    fn decide_by_mode_and_lists() {
+        let (standard, strict) = (
+            Policy::new(1, &[], &[], None),
+            Policy::new(2, &[], &[], None),
+        );
         let mut p = vec![0.0; jev::CATS.len()];
         p[0] = 0.4;
         p[6] = 0.5;
@@ -1023,32 +972,44 @@ mod tests {
         assert_eq!(parse_mode("strict"), Ok(2));
         assert!(parse_mode("none").is_err());
 
-        // Categories named in a list switch on or off; anything else becomes a question of its own.
-        let keep = [
-            "clarifies".to_string(),
-            "States a fact the code relies on".to_string(),
-        ];
-        let rules = Policy::new(2, &keep, &["todo".into(), "Reassures a reviewer".into()]);
-        assert_eq!(&rules.names[11..], ["keep-1", "remove-1"]);
-        assert_eq!(rules.rule("remove-1"), Some("Reassures a reviewer"));
-        // Each rule's probability is its own question's answer, after the 11 categories'.
-        let mut p = vec![0.0; 13];
-        p[6] = 0.9;
-        assert_eq!(rules.decide(&p, 0.6, false), None);
-        p[6] = 0.0;
-        p[12] = 0.7;
-        assert_eq!(rules.decide(&p, 0.6, false), Some("remove-1"));
-        p[11] = 0.5;
-        assert_eq!(rules.decide(&p, 0.6, false), None);
-        p[11] = 0.1;
-        p[0] = 0.8;
-        assert_eq!(rules.decide(&p, 0.6, false), Some("restates-code"));
-        p[0] = 0.65;
-        assert_eq!(rules.decide(&p, 0.6, false), Some("remove-1"));
-        // Neither is enough alone, but a comment that may fit a removed category or the rule is likely one or the other.
-        p[0] = 0.4;
-        p[12] = 0.4;
-        assert_eq!(rules.decide(&p, 0.6, false), Some("remove-1"));
-        assert!(Policy::new(0, &[], &["todo".into()]).removes[0][5]);
+        // Categories named in a list switch on or off whatever the mode.
+        let lists = Policy::new(2, &["clarifies".into()], &["explains-why".into()], None);
+        p[0] = 0.0;
+        assert_eq!(lists.decide(&p, 0.6, false), None);
+        p[7] = 0.3;
+        assert_eq!(lists.decide(&p, 0.6, false), None);
+        p[7] = 0.7;
+        assert_eq!(lists.decide(&p, 0.6, false), Some("explains-why"));
+        assert!(Policy::new(0, &[], &["todo".into()], None).removes[0][5]);
+
+        // The behaviour goes to Jev and into the cache key, so changing it asks again.
+        let src = "a\n// one\nb\n";
+        let key = |b: Option<&str>| {
+            units(
+                src,
+                &lex::TS,
+                &Policy::new(1, &[], &[], b.map(String::from)),
+                "m",
+            )[0]
+            .ask
+            .clone()
+            .unwrap()
+            .0
+        };
+        assert_eq!(key(None), key(None));
+        assert_ne!(key(None), key(Some("Keep jokes.")));
+        let q = jev::question(
+            "// one",
+            "b",
+            "TypeScript",
+            Some("Keep jokes."),
+            &jev::criteria(),
+        );
+        assert_eq!(q["instructions"]["behaviour"], "Keep jokes.");
+        assert!(
+            jev::question("// one", "b", "TypeScript", None, &jev::criteria())["instructions"]
+                .get("behaviour")
+                .is_none()
+        );
     }
 }

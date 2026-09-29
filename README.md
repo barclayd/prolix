@@ -2,7 +2,7 @@
 
 A fast, language-agnostic linter for comments that don't earn their place: ones that restate the code, commented-out code, banners, change notes and signature-only docs. LLM-written code is full of them.
 
-prolix finds every comment in a repo with a byte-level lexer (40+ languages), asks [Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev) what kind of comment each one is, and flags the ones your mode and rules don't keep. `prolix --fix` removes them, including the lines and blank-line gaps they leave behind.
+prolix finds every comment in a repo with a byte-level lexer (40+ languages), asks [Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev) what kind of comment each one is, and flags the ones your mode doesn't keep. `prolix --fix` removes them, including the lines and blank-line gaps they leave behind.
 
 **[Docs](https://prolix.barclaysd.workers.dev)**, with prompts to hand to your coding agent for [setting it up](https://prolix.barclaysd.workers.dev/setup/) and [cleaning up an existing repo](https://prolix.barclaysd.workers.dev/adopt/).
 
@@ -109,7 +109,7 @@ The action only checks the lines a pull request adds, so turning it on never fla
 
 3. For a stricter bar, set `"mode": "strict"` in `prolix.jsonc` and run `--fix` again. It removes TODOs and clarifying comments too.
 
-## Modes and rules
+## Modes and behaviour
 
 | Mode | Keeps | Removes |
 | --- | --- | --- |
@@ -117,20 +117,19 @@ The action only checks the lines a pull request adds, so turning it on never fla
 | `standard` (default) | anything that tells the reader something the code doesn't | restates-code, commented-out-code, decorative, change-note, redundant-doc |
 | `strict` | explains-why, warning, api-doc, reference | the above, plus todo and clarifies |
 
-`keep` and `remove` in `prolix.jsonc` adjust a mode for your project. Each entry is a category name, or a rule in plain English that Jev judges each comment against alongside the categories:
+`keep` and `remove` in `prolix.jsonc` switch categories on or off whatever the mode. `behaviour` tells Jev in plain English how your team judges its comments, and Jev weighs it when it picks a category:
 
 ```jsonc
 {
   "mode": "strict",
-  "keep": [
-    "todo",
-    "States a fact the code relies on but can't show: what a tool does, where a file is generated, what a limit or constant means"
-  ],
-  "remove": ["Includes a sentence reassuring the reader that another code path still works or still recovers"]
+  "keep": ["todo"],
+  "behaviour": "Keep comments that state a fact the code relies on but can't show: what a tool does, where a file is generated, what a limit or constant means."
 }
 ```
 
-Jev is asked about each rule in its own question, weighed against the categories. A comment is flagged when the chance that it fits a category the mode removes or any `remove` rule reaches `threshold`, unless a `keep` rule likely fits it. It's labelled with the `remove` rule when that's likelier than the removed categories, and otherwise with the likeliest removed category. Changing a rule asks Jev again about that rule only.
+A comment is flagged when the chance that it fits a category the mode removes reaches `threshold`, and it's labelled with the likeliest of them. `behaviour` changes which category Jev picks, not what the mode does with it, so name a whole category in `keep` or `remove` instead of describing it. Changing `behaviour` asks Jev again about every comment.
+
+Plain-English rules in `keep` and `remove`, from 0.2, still work with a warning: each becomes a sentence of `behaviour`.
 
 `level` and its values (`all`, `value-add`, `necessary`) still work, with a warning.
 
@@ -164,13 +163,13 @@ Add `prolix-ignore` to any comment to keep it.
 
 | Variable | Default |
 | --- | --- |
-| `TYPESAFE_API_KEY` | required unless the mode is `off` with no `remove` rules |
+| `TYPESAFE_API_KEY` | required unless the mode is `off` with nothing in `remove` |
 | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` |
 | `TYPESAFE_DEFAULT_MODEL` | `jev-latest` |
 
 Each comment is sent with a few lines of surrounding code. prolix batches up to 32 comments per request and sends up to 16 requests in parallel. It retries rate limits and 5xx responses with backoff.
 
-Answers are cached by comment, context, language and model in `node_modules/.cache/prolix.json`, or in `.prolixcache` when there is no `node_modules`. Re-runs only ask about new or changed comments, and switching modes needs no new calls.
+Answers are cached by comment, context, language, model and `behaviour` in `node_modules/.cache/prolix.json`, or in `.prolixcache` when there is no `node_modules`. Re-runs only ask about new or changed comments, and switching modes needs no new calls.
 
 ## Evals
 
@@ -182,7 +181,7 @@ Answers are cached by comment, context, language and model in `node_modules/.cac
 - prompt-injection comments
 - directives, which must never reach Jev
 
-`rules.json` adds two fixtures judged with a `keep` and `remove` config, each comment labelled with what that config should do.
+`behaviour.json` adds two fixtures judged with a `keep` list and a `behaviour`, each comment labelled with what that config should do.
 
 ```sh
 export TYPESAFE_API_KEY=...
@@ -191,7 +190,7 @@ cargo test --release --test evals -- --ignored --nocapture
 
 Each fixture is judged `EVAL_REPEAT` times (default 3) from an empty cache.
 
-The report gives, for `standard`, `strict` and the rules:
+The report gives, for `standard`, `strict` and the behaviour:
 
 - removal precision, the gate, because deleting a useful comment is the costly mistake
 - recall
