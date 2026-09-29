@@ -6,7 +6,7 @@ description: How prolix finds comments, how Jev judges them, how the judgements 
 1. **Find.** A byte-level lexer finds every comment in the files it walks, in [50 languages](/reference/cli/#languages). It knows each language's strings, heredocs and nested comments, so text that only looks like a comment is left alone.
 2. **Skip directives.** Tool and compiler directives, licences and `prolix-ignore` comments are kept without asking Jev. See [Directives](/reference/modes/#directives).
 3. **Judge.** Each remaining comment goes to [Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev) with a few lines of the code around it. Jev scores it against eleven [categories](/reference/modes/#categories), and any [rules](/reference/modes/#rules) in `prolix.jsonc`. prolix sends up to 32 comments per request and up to 16 requests at a time, and retries rate limits and server errors with backoff.
-4. **Decide.** A comment is flagged when the scores of the categories and rules its mode removes add up to the threshold.
+4. **Decide.** A comment is flagged when the chance that it fits a category its mode removes or a `remove` rule reaches the threshold, unless a `keep` rule likely fits it.
 5. **Fix.** `--fix` removes each flagged comment, the line it was on if nothing else was, and the blank-line gap it leaves.
 
 ## Evals

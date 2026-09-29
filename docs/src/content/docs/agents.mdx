@@ -35,7 +35,7 @@ Only write a comment when it tells the reader something the code doesn't: why th
 
 ## Machine-readable output
 
-`--reporter json` prints one JSON object. `comments` lists every comment prolix checked. A flagged comment has its category in `group` and a `fix`, which gives the lines to replace (`startLine` to `endLine`, 1-based and inclusive) and their `replacement`. A kept comment has `group: null`. `confidence` is how sure Jev is that the comment is removable in this mode, and `probabilities` has Jev's score for each [category](/reference/modes/) and rule. A comment flagged by a rule has the rule's text in `rule`:
+`--reporter json` prints one JSON object. `comments` lists every comment prolix checked. A flagged comment has its category in `group` and a `fix`, which gives the lines to replace (`startLine` to `endLine`, 1-based and inclusive) and their `replacement`. A kept comment has `group: null`. `confidence` is how sure Jev is that the comment is removable in this mode, and `probabilities` has Jev's score for each [category](/reference/modes/), and for each rule from that rule's own question. A comment flagged by a rule has the rule's text in `rule`:
 
 ```json
 {
