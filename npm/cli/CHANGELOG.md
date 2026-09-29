@@ -1,5 +1,11 @@
 # @prolix/cli
 
+## 0.2.1
+
+### Patch Changes
+
+- [#19](https://github.com/barclayd/prolix/pull/19) [`3b6c44d`](https://github.com/barclayd/prolix/commit/3b6c44d35787fcce9471ba4346dbb0b642af791b) Thanks [@barclayd](https://github.com/barclayd)! - Ask Jev about each `keep` and `remove` rule in its own question, weighed against the categories. Rules no longer compete with each other or take probability from the categories, so adding a rule doesn't dilute the score of a comment the mode already removes, and a `remove` rule adds to the removed categories rather than splitting their score. Changing a rule asks Jev again about that rule only, and moving a rule between `keep` and `remove` reuses the cached answers.
+
 ## 0.2.0
 
 ### Minor Changes
