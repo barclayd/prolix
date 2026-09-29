@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub struct Cat {
     pub name: &'static str,
     pub summary: &'static str,
-    /// Loosest mode that removes it: 1 standard, 2 strict, 3 none (only a `remove` rule does).
+    /// Loosest mode that removes it: 1 standard, 2 strict, 3 none (only `remove` does).
     pub mode: u8,
     what: &'static str,
     not_for: Option<&'static str>,
@@ -138,8 +138,15 @@ pub fn criteria() -> Map<String, Value> {
         .collect()
 }
 
-pub fn question(comment: &str, code: &str, language: &str, criteria: &Map<String, Value>) -> Value {
-    json!({
+/// Without a `behaviour` the question is the one every cached answer was asked, so they stay valid.
+pub fn question(
+    comment: &str,
+    code: &str,
+    language: &str,
+    behaviour: Option<&str>,
+    criteria: &Map<String, Value>,
+) -> Value {
+    let mut q = json!({
         "type": "choice",
         "instructions": {
             "comment": comment,
@@ -148,15 +155,15 @@ pub fn question(comment: &str, code: &str, language: &str, criteria: &Map<String
             "question": "Which best describes `comment`, judged against `code`?",
         },
         "criteria": criteria,
-    })
-}
-
-/// One plain-English `keep` or `remove` rule as a criterion alongside the categories, named `rule`. Each rule is its own
-/// question, so rules don't compete with each other or take probability from the categories' own question.
-pub fn rule_question(comment: &str, code: &str, language: &str, rule: &str) -> Value {
-    let mut criteria = criteria();
-    criteria.insert("rule".into(), json!({ "what": rule }));
-    question(comment, code, language, &criteria)
+    });
+    if let Some(b) = behaviour {
+        q["instructions"]["behaviour"] = b.into();
+        q["instructions"]["question"] =
+            "Which best describes `comment`, judged against `code`? Judge it the way \
+            `behaviour`, the team's own guidance for its comments, asks."
+                .into();
+    }
+    q
 }
 
 pub fn model() -> String {

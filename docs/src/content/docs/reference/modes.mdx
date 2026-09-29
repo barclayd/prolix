@@ -1,6 +1,6 @@
 ---
 title: Modes and categories
-description: What each prolix mode keeps and removes, the eleven categories Jev sorts comments into, rules in plain English, and the directives prolix never touches.
+description: What each prolix mode keeps and removes, the eleven categories Jev sorts comments into, behaviour in plain English, and the directives prolix never touches.
 ---
 
 ## Modes
@@ -15,30 +15,29 @@ Set the mode in [`prolix.jsonc`](/reference/configuration/), with `--mode` on th
 
 The old `level` setting, `--level` and the action's `level` input still work with a warning, as do their values: `all` is `off`, `value-add` is `standard` and `necessary` is `strict`. `none` was removed. To remove every comment Jev can judge, use `strict` with `"remove": ["explains-why", "warning", "api-doc", "reference"]`.
 
-## Rules
+## Behaviour
 
-`keep` and `remove` adjust a mode for your project. Each entry is either a category name, which switches that category on or off whatever the mode, or a rule in plain English:
+`keep` and `remove` take category names, and switch that category on or off whatever the mode. `behaviour` tells Jev in plain English how your team judges its comments:
 
 ```jsonc title="prolix.jsonc"
 {
   "mode": "strict",
-  "keep": [
-    "todo",
-    "States a fact the code relies on but can't show: what a tool does, where a file is generated, what a limit or constant means"
-  ],
-  "remove": ["Includes a sentence reassuring the reader that another code path still works or still recovers"]
+  "keep": ["todo"],
+  "behaviour": "Keep comments that state a fact the code relies on but can't show: what a tool does, where a file is generated, what a limit or constant means."
 }
 ```
 
-Jev is asked about each rule in its own question, with the categories as the alternatives, so rules don't compete with each other and a comment that fits a rule better than the categories is judged by the rule. A comment flagged by a rule is labelled `remove-1`, `remove-2` and so on, in list order, and the JSON report and the action's suggestions quote the rule's text.
+Jev reads `behaviour` with each comment and weighs it when it picks the comment's category, so a comment your team values lands in a category the mode keeps. It changes which category Jev picks, not what the mode does with a category: to keep every TODO in `strict`, put `todo` in `keep` rather than asking for it in `behaviour`.
 
-Describe what a comment says, not a keyword to match. One sentence works best, with examples after a colon when the idea is broad. Jev picks what best describes the whole comment, so a comment that mostly explains why won't match a rule about one of its sentences. To catch part of a comment, start the rule with "Includes a sentence…". A single word must be a category name, so a typo isn't mistaken for a rule. The same entry can't be in both lists.
+Describe what a comment says, not a keyword to match, with examples after a colon when the idea is broad.
 
-Changing a rule asks Jev again about that rule only. Moving a rule between `keep` and `remove`, or switching modes or thresholds, reuses the cached answers.
+Changing `behaviour` asks Jev again about every comment. Switching modes or thresholds, or changing `keep` and `remove`, reuses the cached answers.
+
+Plain-English rules in `keep` and `remove`, from 0.2, still work with a warning. Each becomes a sentence of `behaviour`, such as "Keep any comment that fits this description: …", so move them there. A single word must be a category name, so a typo fails loudly, and the same category can't be in both lists.
 
 ## Categories
 
-Jev scores each comment against every category. prolix flags the comment when the chance that it fits a category the mode removes (leaving out categories in `keep`) or any `remove` rule reaches the [threshold](/reference/configuration/) (0.6 by default), unless a `keep` rule likely fits it.
+Jev scores each comment against every category. prolix flags the comment when the chance that it fits a category the mode removes (leaving out categories in `keep`, adding those in `remove`) reaches the [threshold](/reference/configuration/) (0.6 by default), and labels it with the likeliest of them.
 
 | Category | Removed in | What it is | Example |
 | --- | --- | --- | --- |
@@ -70,7 +69,7 @@ prolix never sends tool and compiler directives to Jev, and never removes them. 
 
 ## Keeping a comment
 
-Add `prolix-ignore` anywhere in a comment to keep it in every mode, whatever the rules:
+Add `prolix-ignore` anywhere in a comment to keep it in every mode, whatever the settings:
 
 ```ts
 // Pinned to 3.x until the upstream fix ships. prolix-ignore

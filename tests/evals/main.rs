@@ -1,7 +1,7 @@
 //! Live evals of Jev's judgements. Each file in `fixtures/` has its comments labelled in
 //! `cases.json` with every category a careful reviewer would accept, and prolix is run
-//! against it end to end. `rules.json` adds a `keep` and `remove` config and fixtures
-//! labelled with what that config should do, so plain-English rules are measured too.
+//! against it end to end. `behaviour.json` adds a config with a `behaviour` and fixtures
+//! labelled with what that config should do, so a behaviour in plain English is measured too.
 //!
 //!     cargo test --release --test evals -- --ignored --nocapture
 //!
@@ -82,7 +82,7 @@ fn read(path: impl AsRef<Path>) -> String {
 }
 
 fn expect(cats: &[String], mode: u8, config: bool) -> Expect {
-    // Rule cases are labelled with the outcome itself.
+    // Behaviour cases are labelled with the outcome itself.
     match cats {
         [c] if c == "remove" => return Expect::Remove,
         [c] if c == "keep" => return Expect::Keep,
@@ -248,18 +248,18 @@ fn evals() {
     let dir = Path::new(DIR);
     let cases = read(dir.join("cases.json"));
     let labels: Labels = serde_json::from_str(&cases).expect("cases.json");
-    let rules_json = read(dir.join("rules.json"));
-    let rules: Value = serde_json::from_str(&rules_json).expect("rules.json");
-    let rule_labels: Labels =
-        serde_json::from_value(rules["cases"].clone()).expect("rules.json cases");
-    let rule_config = rules["config"].to_string();
-    // The categories are judged in each mode with an empty config; the rules in their config's own mode.
+    let behaviour_json = read(dir.join("behaviour.json"));
+    let behaviour: Value = serde_json::from_str(&behaviour_json).expect("behaviour.json");
+    let behaviour_labels: Labels =
+        serde_json::from_value(behaviour["cases"].clone()).expect("behaviour.json cases");
+    let behaviour_config = behaviour["config"].to_string();
+    // The categories are judged in each mode with an empty config; the behaviour in its config's own mode.
     let sets: [(&Labels, &str, Vec<&str>); 2] = [
         (&labels, "{}", MODES.iter().map(|(m, _)| *m).collect()),
         (
-            &rule_labels,
-            &rule_config,
-            vec![rules["config"]["mode"].as_str().unwrap_or("standard")],
+            &behaviour_labels,
+            &behaviour_config,
+            vec![behaviour["config"]["mode"].as_str().unwrap_or("standard")],
         ),
     ];
     let policy: Value = serde_json::from_str(&read(dir.join("policy.json"))).expect("policy.json");
@@ -280,7 +280,7 @@ fn evals() {
         .collect();
     let mut gates = Vec::new();
 
-    let mut parts = vec![cases.as_str(), rules_json.as_str()];
+    let mut parts = vec![cases.as_str(), behaviour_json.as_str()];
     parts.extend(
         fixtures
             .iter()
@@ -305,7 +305,7 @@ fn evals() {
         }
     }
 
-    // Decisions for the categories, then for the rules.
+    // Decisions for the categories, then for the behaviour.
     let (mut decisions, mut problems, mut ms) = ([Vec::new(), Vec::new()], Vec::new(), Vec::new());
     let (mut tokens, mut model, mut threshold) = (0, String::new(), 0.0);
     for r in 0..repeat {
@@ -350,13 +350,13 @@ fn evals() {
         .map(|p| serde_json::from_str(&read(p)).expect("EVAL_BASELINE"));
     let max_drop = policy["maximumBaselineDrop"].as_f64().unwrap_or(0.0);
     let max_flips = policy["maximumFlipRate"].as_f64().unwrap_or(0.0);
-    let [decisions, rule_decisions] = &decisions;
+    let [decisions, behaviour_decisions] = &decisions;
     // Each row of the report: its name, its decisions and the mode they were made in.
     let rows: Vec<(&str, &[Decision], usize)> = MODES
         .iter()
         .enumerate()
         .map(|(li, (name, _))| (*name, &decisions[..], li))
-        .chain([("rules", &rule_decisions[..], 0)])
+        .chain([("behaviour", &behaviour_decisions[..], 0)])
         .collect();
     let mut modes = Map::new();
     for &(name, ds, li) in &rows {
