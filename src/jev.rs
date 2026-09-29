@@ -125,10 +125,9 @@ const BATCH_TOKENS: usize = 40_000;
 const WORKERS: usize = 16;
 const ATTEMPTS: u32 = 6;
 
-/// The categories, then each plain-English rule from `keep` and `remove` as (name, text).
-pub fn criteria(rules: &[(&str, &str)]) -> Map<String, Value> {
-    let mut criteria: Map<String, Value> = CATS
-        .iter()
+/// The categories, as Jev's `choice` criteria.
+pub fn criteria() -> Map<String, Value> {
+    CATS.iter()
         .map(|c| {
             let mut o = json!({ "what": c.what, "examples": c.examples });
             if let Some(n) = c.not_for {
@@ -136,11 +135,7 @@ pub fn criteria(rules: &[(&str, &str)]) -> Map<String, Value> {
             }
             (c.name.to_string(), o)
         })
-        .collect();
-    for (name, what) in rules {
-        criteria.insert(name.to_string(), json!({ "what": what }));
-    }
-    criteria
+        .collect()
 }
 
 pub fn question(comment: &str, code: &str, language: &str, criteria: &Map<String, Value>) -> Value {
@@ -154,6 +149,14 @@ pub fn question(comment: &str, code: &str, language: &str, criteria: &Map<String
         },
         "criteria": criteria,
     })
+}
+
+/// One plain-English `keep` or `remove` rule as a criterion alongside the categories, named `rule`. Each rule is its own
+/// question, so rules don't compete with each other or take probability from the categories' own question.
+pub fn rule_question(comment: &str, code: &str, language: &str, rule: &str) -> Value {
+    let mut criteria = criteria();
+    criteria.insert("rule".into(), json!({ "what": rule }));
+    question(comment, code, language, &criteria)
 }
 
 pub fn model() -> String {

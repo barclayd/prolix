@@ -30,15 +30,15 @@ The old `level` setting, `--level` and the action's `level` input still work wit
 }
 ```
 
-Jev scores each comment against every rule alongside the categories, so a comment that fits a rule better than any category is judged by the rule. A comment flagged by a rule is labelled `remove-1`, `remove-2` and so on, in list order, and the JSON report and the action's suggestions quote the rule's text.
+Jev is asked about each rule in its own question, with the categories as the alternatives, so rules don't compete with each other and a comment that fits a rule better than the categories is judged by the rule. A comment flagged by a rule is labelled `remove-1`, `remove-2` and so on, in list order, and the JSON report and the action's suggestions quote the rule's text.
 
 Describe what a comment says, not a keyword to match. One sentence works best, with examples after a colon when the idea is broad. Jev picks what best describes the whole comment, so a comment that mostly explains why won't match a rule about one of its sentences. To catch part of a comment, start the rule with "Includes a sentence…". A single word must be a category name, so a typo isn't mistaken for a rule. The same entry can't be in both lists.
 
-Adding or changing a rule asks Jev again about every comment, once. Switching modes or thresholds reuses the cached answers.
+Changing a rule asks Jev again about that rule only. Moving a rule between `keep` and `remove`, or switching modes or thresholds, reuses the cached answers.
 
 ## Categories
 
-Jev scores each comment against every category. prolix adds up the scores of the categories and `remove` rules the mode removes, leaving out anything in `keep`, and flags the comment when the total reaches the [threshold](/reference/configuration/) (0.6 by default).
+Jev scores each comment against every category. prolix flags the comment when the chance that it fits a category the mode removes (leaving out categories in `keep`) or any `remove` rule reaches the [threshold](/reference/configuration/) (0.6 by default), unless a `keep` rule likely fits it.
 
 | Category | Removed in | What it is | Example |
 | --- | --- | --- | --- |

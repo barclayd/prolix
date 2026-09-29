@@ -40,6 +40,6 @@ Unknown settings are an error, so a typo fails loudly rather than being ignored.
 
 ## Cache
 
-Jev's answers are cached by comment, surrounding code, language and model in `node_modules/.cache/prolix.json`, or in `.prolixcache` when there is no `node_modules`. Re-runs only ask about new or changed comments, and switching modes or thresholds needs no new calls. Adding or changing a `keep` or `remove` rule asks again about every comment, once.
+Jev's answers are cached by comment, surrounding code, language and model in `node_modules/.cache/prolix.json`, or in `.prolixcache` when there is no `node_modules`. Re-runs only ask about new or changed comments, and switching modes or thresholds needs no new calls. Adding or changing a `keep` or `remove` rule asks again about that rule only.
 
 Add `.prolixcache` to `.gitignore` in repos without `node_modules`. The cache only grows, so delete it to reset.

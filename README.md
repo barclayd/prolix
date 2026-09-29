@@ -130,7 +130,7 @@ The action only checks the lines a pull request adds, so turning it on never fla
 }
 ```
 
-Jev spreads its judgement of each comment across the categories and rules. A comment is flagged when the removable ones (the mode's categories and `remove` entries, minus `keep` entries) add up to at least `threshold`, and it's labelled with the likeliest of them. Adding or changing a rule asks Jev again about every comment, once.
+Jev is asked about each rule in its own question, weighed against the categories. A comment is flagged when the chance that it fits a category the mode removes or any `remove` rule reaches `threshold`, unless a `keep` rule likely fits it. It's labelled with the `remove` rule when that's likelier than the removed categories, and otherwise with the likeliest removed category. Changing a rule asks Jev again about that rule only.
 
 `level` and its values (`all`, `value-add`, `necessary`) still work, with a warning.
 
