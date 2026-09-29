@@ -1,6 +1,6 @@
 {
   "name": "@prolix/cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Finds and removes comments that don't earn their place, judged by Jev",
   "repository": {
     "type": "git",
