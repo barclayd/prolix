@@ -1,9 +1,10 @@
 {
   "version": 1,
-  "datasetHash": "ebd9aed5762ddfb7",
+  "datasetHash": "393deb0fc0842ec6",
   "floors": {
     "standard": { "precision": 0.97, "recall": 0.9 },
-    "strict": { "precision": 0.97, "recall": 0.9 }
+    "strict": { "precision": 0.97, "recall": 0.9 },
+    "rules": { "precision": 0.97, "recall": 0.7 }
   },
   "maximumFlipRate": 0.05,
   "maximumBaselineDrop": 0.05,
@@ -11,6 +12,6 @@
     "commit": "962ac35",
     "model": "jev-latest",
     "repeat": 3,
-    "note": "Provisional floors for the 15-fixture development set, set below the first baseline (precision 1.000 in both modes; recall 0.991 standard, 1.000 strict). Changing labels or floors needs review."
+    "note": "Provisional floors for the 15-fixture development set, set below the first baseline (precision 1.000 in both modes; recall 0.991 standard, 1.000 strict). The rules set (2 fixtures, 8 comments) had precision 1.000 and recall 0.750 on its first run: a remove rule about one sentence misses a comment that mostly explains why. Changing labels or floors needs review."
   }
 }

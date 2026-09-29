@@ -182,6 +182,8 @@ Answers are cached by comment, context, language and model in `node_modules/.cac
 - prompt-injection comments
 - directives, which must never reach Jev
 
+`rules.json` adds two fixtures judged with a `keep` and `remove` config, each comment labelled with what that config should do.
+
 ```sh
 export TYPESAFE_API_KEY=...
 cargo test --release --test evals -- --ignored --nocapture
@@ -189,7 +191,7 @@ cargo test --release --test evals -- --ignored --nocapture
 
 Each fixture is judged `EVAL_REPEAT` times (default 3) from an empty cache.
 
-The report gives, for `standard` and `strict`:
+The report gives, for `standard`, `strict` and the rules:
 
 - removal precision, the gate, because deleting a useful comment is the costly mistake
 - recall
@@ -199,7 +201,7 @@ The report gives, for `standard` and `strict`:
 - top-1 confusions
 - every wrong decision, for error analysis
 
-`policy.json` pins a hash of the dataset and sets the floors, so changing a label or a floor is a reviewed change. Set `EVAL_BASELINE=path/to/report.json` to also fail on a drop of more than 0.05 against an earlier run. Results go to `tests/evals/results/<run>/`. The `evals` workflow runs on pull requests that touch `src` or `tests/evals`, or on demand, and posts the summary to the run page. It needs a `TYPESAFE_API_KEY` repository secret. A full run uses about 240k input tokens.
+`policy.json` pins a hash of the dataset and sets the floors, so changing a label or a floor is a reviewed change. Set `EVAL_BASELINE=path/to/report.json` to also fail on a drop of more than 0.05 against an earlier run. Results go to `tests/evals/results/<run>/`. The `evals` workflow runs on pull requests that touch `src` or `tests/evals`, or on demand, and posts the summary to the run page. It needs a `TYPESAFE_API_KEY` repository secret. A full run uses about 270k input tokens.
 
 ## Known limits
 
