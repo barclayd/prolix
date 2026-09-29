@@ -17,13 +17,13 @@ The package installs a prebuilt binary for your platform: macOS arm64 and x64, L
 ## Usage
 
 ```sh
-prolix [paths...] [--fix] [--changed[=<ref>]] [--level <level>] [--reporter <reporter>]
+prolix [paths...] [--fix] [--changed[=<ref>]] [--mode <mode>] [--reporter <reporter>]
 ```
 
 ```sh
 export TYPESAFE_API_KEY=...        # from typesafe.ai
 prolix                             # check the current directory
-prolix src lib --level necessary   # check specific paths at a stricter level
+prolix src lib --mode strict       # check specific paths in strict mode
 prolix --fix                       # remove everything flagged
 prolix --changed=main              # only comments on lines added since the branch left main
 prolix --changed --fix             # remove flagged comments in uncommitted changes
@@ -35,7 +35,7 @@ prolix --reporter markdown         # a summary for a pull request comment or job
 | --- | --- | --- |
 | `--fix` | | Remove the flagged comments, the lines they leave empty and the blank-line gaps around them. |
 | `--changed[=<ref>]` | `HEAD` | Only check comments on lines added since the merge base with `<ref>`. |
-| `--level <level>` | `prolix.jsonc`, then `value-add` | `all`, `value-add`, `necessary` or `none`. See [Levels](/reference/levels/). |
+| `--mode <mode>` | `prolix.jsonc`, then `standard` | `off`, `standard` or `strict`. See [Modes](/reference/modes/). `--level` is the old name. |
 | `--reporter <reporter>` | `text` | `text`, `json` or `markdown`. The JSON shape is described in [Use with coding agents](/agents/#machine-readable-output). |
 | `-h`, `--help` | | Print help. |
 | `-V`, `--version` | | Print the version. |

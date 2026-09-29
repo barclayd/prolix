@@ -46,7 +46,7 @@ When this is set up, prolix runs on every pull request. It checks only the lines
 
    ```jsonc title="prolix.jsonc"
    {
-     "level": "necessary",
+     "mode": "strict",
      "ignore": ["src/types/env.d.ts"]
    }
    ```
@@ -99,7 +99,8 @@ It exits 0 when nothing is flagged and 1 when something is. To see it flag somet
 ## Options
 
 - Make the check block merging with `fail-on-findings: true`. By default it only advises.
-- Keep more comments with `"level": "value-add"`, which leaves TODOs and comments that only summarise what code does alone.
+- Keep more comments with `"mode": "standard"`, which leaves TODOs and comments that only summarise what code does alone.
+- Tune what's kept for your project with `keep` and `remove` rules in plain English. See [Rules](/reference/modes/#rules).
 - Check the whole repository rather than the lines each pull request adds with `scope: full`.
 
 See the [GitHub Action reference](/reference/action/) for every input.

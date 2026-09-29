@@ -1,0 +1,24 @@
+{
+  "config": {
+    "mode": "strict",
+    "keep": [
+      "todo",
+      "States a fact the code relies on but can't show: what a tool does, where a file is generated, what a limit or constant means"
+    ],
+    "remove": ["Includes a sentence reassuring the reader that another code path still works or still recovers"]
+  },
+  "cases": {
+    "rules-payment.ts": {
+      "Shown over the provider's own receipt": ["remove"],
+      "Refunds reach the ledger": ["keep"],
+      "Loop over the lines": ["remove"],
+      "TODO(PAY-431)": ["keep"],
+      "Existing receipts keep working": ["remove"]
+    },
+    "rules-release.sh": {
+      "jq -e exits non-zero": ["keep"],
+      "writes the manifest": ["keep"],
+      "Upload the tarball": ["remove"]
+    }
+  }
+}

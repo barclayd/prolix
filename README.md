@@ -2,7 +2,7 @@
 
 A fast, language-agnostic linter for comments that don't earn their place: ones that restate the code, commented-out code, banners, change notes and signature-only docs. LLM-written code is full of them.
 
-prolix finds every comment in a repo with a byte-level lexer (40+ languages), asks [Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev) what kind of comment each one is, and flags the ones your chosen level doesn't keep. `prolix --fix` removes them, including the lines and blank-line gaps they leave behind.
+prolix finds every comment in a repo with a byte-level lexer (40+ languages), asks [Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev) what kind of comment each one is, and flags the ones your mode and rules don't keep. `prolix --fix` removes them, including the lines and blank-line gaps they leave behind.
 
 **[Docs](https://prolix.barclaysd.workers.dev)**, with prompts to hand to your coding agent for [setting it up](https://prolix.barclaysd.workers.dev/setup/) and [cleaning up an existing repo](https://prolix.barclaysd.workers.dev/adopt/).
 
@@ -13,7 +13,7 @@ src/client.ts
   40:1   commented-out-code  // const old = retry(req);
   57:26  change-note         // Updated to use the new API
 
-Found 3 comments in 1 file (level: value-add):
+Found 3 comments in 1 file (mode: standard):
 
       1  restates-code       repeats what the code already says
       1  commented-out-code  disabled code left behind
@@ -40,7 +40,7 @@ Releases use [changesets](https://github.com/changesets/changesets). Run `npx ch
 ```sh
 export TYPESAFE_API_KEY=...        # from typesafe.ai
 prolix                             # check the current directory
-prolix src lib --level necessary   # check specific paths at a stricter level
+prolix src lib --mode strict       # check specific paths in strict mode
 prolix --fix                       # remove everything flagged
 prolix --changed=main              # only comments on lines added since the branch left main
 prolix --changed --fix             # remove flagged comments in uncommitted changes, e.g. in a pre-commit hook
@@ -85,7 +85,7 @@ jobs:
 | Input | Default | |
 | --- | --- | --- |
 | `api-key` | | Typesafe API key. When it's empty or Jev rejects it, the pull request gets a comment that links to the repository's Actions secrets. Pull requests from forks and Dependabot don't get secrets, so for those the check is skipped with a notice. |
-| `level` | `prolix.jsonc`, then `value-add` | `all`, `value-add`, `necessary` or `none` |
+| `mode` | `prolix.jsonc`, then `standard` | `off`, `standard` or `strict` |
 | `scope` | `changed` | `full` checks the whole repository |
 | `comment` | `true` | post and update the summary comment |
 | `suggestions` | `true` | post a suggestion per flagged comment |
@@ -101,22 +101,38 @@ The `flagged` output is the number of comments flagged. The summary also goes to
 The action only checks the lines a pull request adds, so turning it on never flags the comments already in a repo. To clear those:
 
 1. Add the workflow first, so new comments are checked from the next pull request.
-2. Remove the backlog in one pull request at `value-add`, which only removes comments that restate the code, disabled code, banners, change notes and signature-only docs. Review the diff like any other, and restore anything worth keeping with `prolix-ignore` added to it. In a large repo, fix a directory at a time (`npx @prolix/cli src/components --level value-add --fix`) so each pull request stays reviewable.
+2. Remove the backlog in one pull request in `standard` mode, which only removes comments that restate the code, disabled code, banners, change notes and signature-only docs. Review the diff like any other, and restore anything worth keeping with `prolix-ignore` added to it. In a large repo, fix a directory at a time (`npx @prolix/cli src/components --fix`) so each pull request stays reviewable.
 
    ```sh
-   npx @prolix/cli --level value-add --fix
+   npx @prolix/cli --fix
    ```
 
-3. For a stricter bar, set `"level": "necessary"` in `prolix.jsonc` and run `--fix` again. It removes TODOs and clarifying comments too.
+3. For a stricter bar, set `"mode": "strict"` in `prolix.jsonc` and run `--fix` again. It removes TODOs and clarifying comments too.
 
-## Levels
+## Modes and rules
 
-| Level | Keeps | Removes |
+| Mode | Keeps | Removes |
 | --- | --- | --- |
-| `all` | everything | nothing |
-| `value-add` (default) | anything that tells the reader something the code doesn't | restates-code, commented-out-code, decorative, change-note, redundant-doc |
-| `necessary` | explains-why, warning, api-doc, reference | the above, plus todo and clarifies |
-| `none` | tool directives and licences only | every other comment (no Jev call) |
+| `off` | everything | nothing |
+| `standard` (default) | anything that tells the reader something the code doesn't | restates-code, commented-out-code, decorative, change-note, redundant-doc |
+| `strict` | explains-why, warning, api-doc, reference | the above, plus todo and clarifies |
+
+`keep` and `remove` in `prolix.jsonc` adjust a mode for your project. Each entry is a category name, or a rule in plain English that Jev judges each comment against alongside the categories:
+
+```jsonc
+{
+  "mode": "strict",
+  "keep": [
+    "todo",
+    "States a fact the code relies on but can't show: what a tool does, where a file is generated, what a limit or constant means"
+  ],
+  "remove": ["Includes a sentence reassuring the reader that another code path still works or still recovers"]
+}
+```
+
+Jev spreads its judgement of each comment across the categories and rules. A comment is flagged when the removable ones (the mode's categories and `remove` entries, minus `keep` entries) add up to at least `threshold`, and it's labelled with the likeliest of them. Adding or changing a rule asks Jev again about every comment, once.
+
+`level` and its values (`all`, `value-add`, `necessary`) still work, with a warning.
 
 Tool and compiler directives are never touched. prolix recognises them by shape rather than by a list of tool names, so a linter it has never heard of is still respected:
 
@@ -134,7 +150,7 @@ Add `prolix-ignore` to any comment to keep it.
 
 ```jsonc
 {
-  "level": "value-add",
+  "mode": "standard",
   // How sure Jev must be (0-1) that a comment is removable before flagging it.
   "threshold": 0.6,
   // Globs relative to this file, on top of .gitignore.
@@ -142,19 +158,19 @@ Add `prolix-ignore` to any comment to keep it.
 }
 ```
 
-`--level` on the command line overrides the file.
+`--mode` on the command line overrides the file.
 
 ## Jev and caching
 
 | Variable | Default |
 | --- | --- |
-| `TYPESAFE_API_KEY` | required for `value-add` and `necessary` |
+| `TYPESAFE_API_KEY` | required unless the mode is `off` with no `remove` rules |
 | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` |
 | `TYPESAFE_DEFAULT_MODEL` | `jev-latest` |
 
 Each comment is sent with a few lines of surrounding code. prolix batches up to 32 comments per request and sends up to 16 requests in parallel. It retries rate limits and 5xx responses with backoff.
 
-Answers are cached by comment, context, language and model in `node_modules/.cache/prolix.json`, or in `.prolixcache` when there is no `node_modules`. Re-runs only ask about new or changed comments, and switching levels needs no new calls.
+Answers are cached by comment, context, language and model in `node_modules/.cache/prolix.json`, or in `.prolixcache` when there is no `node_modules`. Re-runs only ask about new or changed comments, and switching modes needs no new calls.
 
 ## Evals
 
@@ -166,6 +182,8 @@ Answers are cached by comment, context, language and model in `node_modules/.cac
 - prompt-injection comments
 - directives, which must never reach Jev
 
+`rules.json` adds two fixtures judged with a `keep` and `remove` config, each comment labelled with what that config should do.
+
 ```sh
 export TYPESAFE_API_KEY=...
 cargo test --release --test evals -- --ignored --nocapture
@@ -173,7 +191,7 @@ cargo test --release --test evals -- --ignored --nocapture
 
 Each fixture is judged `EVAL_REPEAT` times (default 3) from an empty cache.
 
-The report gives, for `value-add` and `necessary`:
+The report gives, for `standard`, `strict` and the rules:
 
 - removal precision, the gate, because deleting a useful comment is the costly mistake
 - recall
@@ -183,7 +201,7 @@ The report gives, for `value-add` and `necessary`:
 - top-1 confusions
 - every wrong decision, for error analysis
 
-`policy.json` pins a hash of the dataset and sets the floors, so changing a label or a floor is a reviewed change. Set `EVAL_BASELINE=path/to/report.json` to also fail on a drop of more than 0.05 against an earlier run. Results go to `tests/evals/results/<run>/`. The `evals` workflow runs on pull requests that touch `src` or `tests/evals`, or on demand, and posts the summary to the run page. It needs a `TYPESAFE_API_KEY` repository secret. A full run uses about 240k input tokens.
+`policy.json` pins a hash of the dataset and sets the floors, so changing a label or a floor is a reviewed change. Set `EVAL_BASELINE=path/to/report.json` to also fail on a drop of more than 0.05 against an earlier run. Results go to `tests/evals/results/<run>/`. The `evals` workflow runs on pull requests that touch `src` or `tests/evals`, or on demand, and posts the summary to the run page. It needs a `TYPESAFE_API_KEY` repository secret. A full run uses about 270k input tokens.
 
 ## Known limits
 
