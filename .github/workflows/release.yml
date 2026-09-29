@@ -70,10 +70,11 @@ jobs:
           path: target/${{ matrix.target }}/release/prolix${{ contains(matrix.target, 'windows') && '.exe' || '' }}
 
   # Publishes with npm trusted publishing: npm trades the job's OIDC token for a short-lived one, so there's no npm secret.
-  # Pull requests from forks get no OIDC token, so they only build.
+  # Pull requests from forks get no OIDC token, so they only build. The Version PR only bumps the version, so it skips the
+  # canary too.
   publish:
     needs: build
-    if: ${{ !cancelled() && needs.build.result == 'success' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    if: ${{ !cancelled() && needs.build.result == 'success' && (github.event_name == 'push' || (github.event.pull_request.head.repo.full_name == github.repository && github.head_ref != 'changeset-release/main')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
