@@ -26,13 +26,13 @@ The old `level` setting, `--level` and the action's `level` input still work wit
     "todo",
     "States a fact the code relies on but can't show: what a tool does, where a file is generated, what a limit or constant means"
   ],
-  "remove": ["Reassures a reviewer that another code path still works, instead of explaining this one"]
+  "remove": ["Includes a sentence reassuring the reader that another code path still works or still recovers"]
 }
 ```
 
 Jev scores each comment against every rule alongside the categories, so a comment that fits a rule better than any category is judged by the rule. A comment flagged by a rule is labelled `remove-1`, `remove-2` and so on, in list order, and the JSON report and the action's suggestions quote the rule's text.
 
-Describe what a comment says, not a keyword to match. One sentence works best, with examples after a colon when the idea is broad. A single word must be a category name, so a typo isn't mistaken for a rule. The same entry can't be in both lists.
+Describe what a comment says, not a keyword to match. One sentence works best, with examples after a colon when the idea is broad. Jev picks what best describes the whole comment, so a comment that mostly explains why won't match a rule about one of its sentences. To catch part of a comment, start the rule with "Includes a sentence…". A single word must be a category name, so a typo isn't mistaken for a rule. The same entry can't be in both lists.
 
 Adding or changing a rule asks Jev again about every comment, once. Switching modes or thresholds reuses the cached answers.
 

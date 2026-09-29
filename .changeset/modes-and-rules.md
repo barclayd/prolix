@@ -8,7 +8,7 @@
 {
   "mode": "strict",
   "keep": ["todo", "States a fact the code relies on but can't show: what a tool does, where a file is generated, what a limit or constant means"],
-  "remove": ["Reassures a reviewer that another code path still works, instead of explaining this one"]
+  "remove": ["Includes a sentence reassuring the reader that another code path still works or still recovers"]
 }
 ```
 
