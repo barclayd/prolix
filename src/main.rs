@@ -608,6 +608,9 @@ fn units(src: &str, lang: &lex::Lang, policy: &Policy, model: &str) -> Vec<Unit>
             _ => spans.push((r.start, r.end, alone)),
         }
     }
+    // An SSI is read by the web server. One quoted in a run of line comments keeps the whole run, since removing the
+    // lines around it would leave half a sentence.
+    spans.retain(|&(s, e, _)| !has_ssi(&src[s..e]));
     if spans.is_empty() {
         return Vec::new();
     }
@@ -647,6 +650,20 @@ fn units(src: &str, lang: &lex::Lang, policy: &Policy, model: &str) -> Vec<Unit>
             }
         })
         .collect()
+}
+
+/// A server-side include in any server's spelling: Apache's `<!--#include virtual="/nav" -->`, nginx's
+/// `<!--# echo var="x" -->` or IIS's `<!-- #include file="a.inc" -->`.
+fn has_ssi(text: &str) -> bool {
+    text.match_indices("<!--").any(|(i, _)| {
+        text[i + 4..]
+            .trim_start()
+            .strip_prefix('#')
+            .is_some_and(|r| {
+                r.trim_start()
+                    .starts_with(|c: char| c.is_ascii_alphabetic())
+            })
+    })
 }
 
 /// Tool, compiler and licence comments, which are kept at every level. Tools are recognised by the shape of what
@@ -952,6 +969,20 @@ mod tests {
             (u[0].line, u[2].col, u[3].group),
             (2, 3, Some("decorative"))
         );
+        // SSIs are read by the web server, and one quoted in a run of line comments keeps the whole run.
+        let html = "<!--#if expr=\"$x\" -->\n<!--#include virtual=\"/nav\" -->\n<!--#endif -->\n\
+                    <!--# echo var=\"x\" -->\n<!-- #include file=\"a.inc\" -->\n<!-- nav -->\n<!-- #1 -->\n";
+        let u = units(
+            html,
+            lex::lang_for(Path::new("a.html")).unwrap(),
+            &Policy::new(2, &[], &[], None),
+            "m",
+        );
+        let texts: Vec<_> = u.iter().map(|u| &html[u.start..u.end]).collect();
+        assert_eq!(texts, ["<!-- nav -->", "<!-- #1 -->"]);
+        let src =
+            "a\n// Replaces each\n// <!--#include virtual=\"/x\"--> with\n// a fragment.\nb\n";
+        assert!(units(src, &lex::TS, &Policy::new(2, &[], &[], None), "m").is_empty());
     }
 
     #[test]

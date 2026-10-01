@@ -66,6 +66,7 @@ prolix never sends tool and compiler directives to Jev, and never removes them. 
 - tags and settings: `@ts-expect-error`, `$FlowFixMe`, `# shellcheck source=lib.sh`, `# syntax=docker/dockerfile:1`, `/* webpackChunkName: "x" */`
 - version pins beside a hash, as in `uses: actions/checkout@<sha> # v4.1.1`
 - shebangs, pragmas, regions, `/*!` licence headers, copyright and SPDX lines, `@generated` markers and `/// <reference>`
+- server-side includes in any server's spelling, such as `<!--#include virtual="/nav" -->`, `<!--# echo var="x" -->` or `<!-- #include file="a.inc" -->`, along with any run of line comments that quotes one
 
 ## Keeping a comment
 
