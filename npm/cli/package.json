@@ -4,7 +4,7 @@
   "description": "Finds and removes comments that don't earn their place, judged by Jev",
   "repository": {
     "type": "git",
-    "url": "https://github.com/barclayd/prolix"
+    "url": "git+https://github.com/barclayd/prolix.git"
   },
   "bin": {
     "prolix": "bin/prolix"
