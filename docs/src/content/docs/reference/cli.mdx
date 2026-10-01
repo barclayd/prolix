@@ -61,3 +61,7 @@ prolix --reporter markdown         # a summary for a pull request comment or job
 JS/TS/JSX/TSX use syntax parsers and support validated automatic fixes. Other languages use a byte-level lexer and currently provide review findings without automatic fixes. Detection is available for:
 
 Astro, C, C#, C++, CMake, CSS, Dart, Dockerfile, Elixir, Elm, F#, Go, GraphQL, Groovy, Haskell, HCL and Terraform, HTML, Java, JavaScript and JSX, JSONC, Julia, Kotlin, Less, Lisp, Lua, Makefile, Nim, Nix, OCaml, Perl, PHP, PowerShell, Protobuf, Python, R, Ruby, Rust, Sass, Scala, SCSS, Shell, Solidity, SQL, Svelte, Swift, TOML, TypeScript and TSX, Vue, XML and YAML.
+
+## GitHub reviews
+
+`prolix github review` scans once and reconciles its results with a pull request. `--dry-run` prints the proposed changes without posting them. See [local review commands](/reference/action/#implementation-and-local-dry-runs) for credentials, checkout requirements and options, or run `prolix github review --help`.

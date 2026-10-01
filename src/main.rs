@@ -1,16 +1,19 @@
 mod config;
 mod diff;
 mod fix;
+mod github;
 mod jev;
 mod lex;
+mod report;
 mod syntax;
+
+use report::{Finding, Fix, FixStatus, Report, Stats};
 
 use ignore::{
     overrides::{Override, OverrideBuilder},
     WalkBuilder, WalkState,
 };
 use std::collections::HashSet;
-use std::fmt::Write as _;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
@@ -22,8 +25,10 @@ Find and remove comments that don't earn their place, judged by Jev.
 
 Usage: prolix [paths...] [--fix] [--changed[=<ref>]] [--mode <mode>] [--reporter <reporter>]
 
+GitHub: prolix github review [--dry-run] [--help]
+
 Options:
-  --fix                    Remove the flagged comments
+  --fix                    Apply eligible, validated removals
   --changed[=<ref>]        Only check comments on lines added since <ref>   [default: HEAD]
   --mode <mode>            off | standard | strict   [default: standard]
   --reporter <reporter>    text | json | markdown   [default: text]
@@ -42,8 +47,6 @@ Asking Jev needs TYPESAFE_API_KEY.
 const MODES: [&str; 3] = ["off", "standard", "strict"];
 const MAX_FILE: u64 = 1 << 20;
 const MAX_COMMENT: usize = 2000;
-/// Findings listed in a Markdown report, which keeps a PR comment under GitHub's 65k-character limit.
-const MD_ROWS: usize = 200;
 
 /// Words tools use to switch a check off or back on, as in `eslint-disable`, `ignore=DL3008` or `c8 ignore`.
 const VERBS: &[&str] = &[
@@ -111,13 +114,24 @@ fn main() {
     std::process::exit(code);
 }
 
+#[derive(Default)]
+struct ScanOptions {
+    paths: Vec<String>,
+    fix: bool,
+    mode: Option<String>,
+    changed: Option<String>,
+}
+
 fn run() -> Result<i32, String> {
-    let t0 = Instant::now();
+    let args: Vec<_> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|s| s == "github") {
+        return github::run(&args[1..]);
+    }
     let (mut paths, mut fix, mut mode, mut reporter) = (Vec::new(), false, None, None);
     let mut changed = None;
     // The same run with --fix, for the hint after the findings.
     let mut again = String::new();
-    let mut args = std::env::args().skip(1);
+    let mut args = args.into_iter();
     while let Some(a) = args.next() {
         if !a.starts_with("--fix") && !a.starts_with("--reporter") {
             again = again + " " + &a;
@@ -160,6 +174,37 @@ fn run() -> Result<i32, String> {
             "unknown reporter \"{reporter}\" (expected text, json or markdown)"
         ));
     }
+    let report = scan(ScanOptions {
+        paths,
+        fix,
+        mode,
+        changed,
+    })?;
+    if reporter == "json" {
+        println!(
+            "{}",
+            serde_json::to_string(&report).map_err(|e| e.to_string())?
+        );
+    } else {
+        let color = reporter == "text"
+            && std::io::stdout().is_terminal()
+            && std::env::var_os("NO_COLOR").is_none();
+        print!(
+            "{}",
+            report::render(&report, reporter == "markdown", color, fix, &again)
+        );
+    }
+    Ok(report.exit_code())
+}
+
+fn scan(options: ScanOptions) -> Result<Report, String> {
+    let t0 = Instant::now();
+    let ScanOptions {
+        paths,
+        fix,
+        mode,
+        changed,
+    } = options;
     let (cfg, root) = config::load()?;
     if cfg.level.is_some() {
         eprintln!("prolix: the \"level\" setting is deprecated; use \"mode\"");
@@ -259,12 +304,11 @@ fn run() -> Result<i32, String> {
     let mut pending = Vec::new();
     let mut pending_keys = HashSet::new();
     let (mut cached, mut deduplicated) = (0, 0);
-    let (mut checked, mut judged) = (0, 0);
+    let mut checked = 0;
     for (fi, f) in files.iter().enumerate() {
         for (ui, u) in f.units.iter().enumerate() {
             checked += 1;
             if let Some((key, _)) = &u.ask {
-                judged += 1;
                 if cache.contains_key(key) {
                     cached += 1;
                 } else if pending_keys.insert(key.clone()) {
@@ -410,246 +454,100 @@ fn run() -> Result<i32, String> {
         fixed += count;
     }
     let total: usize = files.iter().map(|f| flagged(f).len()).sum();
-    let exit = if !complete {
-        2
-    } else {
-        i32::from(total > fixed)
-    };
-    let n = scanned.into_inner();
-    if reporter == "json" {
-        let found: usize = files.iter().map(|f| flagged(f).len()).sum();
-        let round = |x: f32| (f64::from(x) * 1000.0).round() / 1000.0;
-        let policy = &policy;
-        let comments: Vec<_> = files
-            .iter()
-            .flat_map(|f| {
-                f.units.iter().map(move |u| {
-                    let probs = u.probs.as_ref().map(|p| {
-                        jev::CATS
-                            .iter()
-                            .zip(p)
-                            .map(|(c, &x)| (c.name.to_string(), round(x).into()))
-                            .collect::<serde_json::Map<_, _>>()
-                    });
-                    serde_json::json!({
-                        "path": shown(&f.path),
-                        "line": u.line,
-                        "column": u.col,
-                        "text": &f.src[u.start..u.end],
-                        "group": u.group,
-                        "skipped": u.skipped,
-                        "model": u.model,
-                        "fixStatus": if u.fixable { "available" } else if u.group.is_none() { "not-flagged" } else if !complete { "incomplete-check" } else if !syntax::supported(f.lang) { "unverified-language" } else if u.probs.as_ref().is_some_and(|p| policy.removable(p, f.lang.config()) < fix_threshold) { "below-fix-threshold" } else { "verification-failed" },
-                        "decisionId": format!("{:016x}", jev::hash(&[&f.src[u.start..u.end], &context(&f.src, u.start, u.end), &jev::prompt_hash(), &format!("{:?}", policy.removes), policy.behaviour.as_deref().unwrap_or(""), &threshold.to_string()])),
-                        "confidence": u.probs.as_ref().map(|p| round(policy.removable(p, f.lang.config()))),
-                        "probabilities": probs,
-                        "fix": u.fixable.then(|| {
-                            let (a, b, r) = fix::suggestion(&f.src, (u.start, u.end), f.lang.jsx);
-                            serde_json::json!({ "startLine": a, "endLine": b, "replacement": r })
-                        }),
-                    })
-                })
+    let round = |x: f32| (f64::from(x) * 1000.0).round() / 1000.0;
+    let comments = files
+        .iter()
+        .flat_map(|f| {
+            let policy = &policy;
+            f.units.iter().map(move |u| Finding {
+                path: shown(&f.path),
+                line: u.line,
+                column: u.col,
+                text: f.src[u.start..u.end].to_string(),
+                group: u.group.map(String::from),
+                skipped: u.skipped.map(String::from),
+                model: u.model.clone(),
+                fix_status: if u.fixable {
+                    FixStatus::Available
+                } else if u.group.is_none() {
+                    FixStatus::NotFlagged
+                } else if !complete {
+                    FixStatus::IncompleteCheck
+                } else if !syntax::supported(f.lang) {
+                    FixStatus::UnverifiedLanguage
+                } else if u
+                    .probs
+                    .as_ref()
+                    .is_some_and(|p| policy.removable(p, f.lang.config()) < fix_threshold)
+                {
+                    FixStatus::BelowFixThreshold
+                } else {
+                    FixStatus::VerificationFailed
+                },
+                decision_id: format!(
+                    "{:016x}",
+                    jev::hash(&[
+                        &f.src[u.start..u.end],
+                        &context(&f.src, u.start, u.end),
+                        &jev::prompt_hash(),
+                        &format!("{:?}", policy.removes),
+                        policy.behaviour.as_deref().unwrap_or(""),
+                        &threshold.to_string()
+                    ])
+                ),
+                confidence: u
+                    .probs
+                    .as_ref()
+                    .map(|p| round(policy.removable(p, f.lang.config()))),
+                probabilities: u.probs.as_ref().map(|p| {
+                    jev::CATS
+                        .iter()
+                        .zip(p)
+                        .map(|(c, &x)| (c.name.to_string(), round(x)))
+                        .collect()
+                }),
+                fix: u.fixable.then(|| {
+                    let (start_line, end_line, replacement) =
+                        fix::suggestion(&f.src, (u.start, u.end), f.lang.jsx);
+                    Fix {
+                        start_line,
+                        end_line,
+                        replacement,
+                    }
+                }),
             })
-            .collect();
-        let report = serde_json::json!({
-            "complete": complete,
-            "errors": errors,
-            "mode": MODES[mode as usize],
-            "threshold": round(threshold),
-            "fixThreshold": round(fix_threshold),
-            "promptVersion": jev::PROMPT_VERSION,
-            "promptHash": jev::prompt_hash(),
-            "resolvedModels": files.iter().flat_map(|f| &f.units).filter_map(|u| u.model.clone()).collect::<std::collections::BTreeSet<_>>(),
-            "model": model,
-            "comments": comments,
-            "stats": {
-                "files": n,
-                "comments": checked,
-                "flagged": found,
-                "asked": asked,
-                "cached": cached,
-                "deduplicated": deduplicated,
-                "skipped": skipped,
-                "fixed": fixed,
-                "remaining": total - fixed,
-                "unanswered": unanswered,
-                "inputTokens": tokens,
-                "elapsedMs": t0.elapsed().as_millis() as u64,
-            },
-        });
-        println!("{report}");
-        return Ok(exit);
-    }
-
-    let md = reporter == "markdown";
-    let color = !md && std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
-    let paint = |code: &str, s: &str| {
-        if color {
-            format!("\x1b[{code}m{s}\x1b[0m")
-        } else {
-            s.to_string()
-        }
-    };
-    let mut out = String::new();
-    let mut groups: Vec<(&str, usize)> = Vec::new();
-    let (mut found, mut found_files) = (0, 0);
-    for f in &files {
-        let spans: Vec<_> = f.units.iter().filter(|u| u.group.is_some()).collect();
-        if spans.is_empty() {
-            continue;
-        }
-        found += spans.len();
-        found_files += 1;
-        if !fix && !md {
-            let _ = writeln!(
-                out,
-                "{}{}",
-                if out.is_empty() { "" } else { "\n" },
-                paint("4", &shown(&f.path))
-            );
-        }
-        let at: Vec<_> = spans
+        })
+        .collect();
+    Ok(Report {
+        complete,
+        errors,
+        mode: MODES[mode as usize].to_string(),
+        threshold: round(threshold),
+        fix_threshold: round(fix_threshold),
+        prompt_version: jev::PROMPT_VERSION.to_string(),
+        prompt_hash: jev::prompt_hash(),
+        resolved_models: files
             .iter()
-            .map(|u| format!("{}:{}", u.line, u.col))
-            .collect();
-        let w = at.iter().map(String::len).max().unwrap_or(0);
-        for (i, (u, at)) in spans.iter().zip(&at).enumerate() {
-            let g = u.group.unwrap();
-            match groups.iter_mut().find(|(n, _)| *n == g) {
-                Some((_, c)) => *c += 1,
-                None => groups.push((g, 1)),
-            }
-            let text = preview(&f.src[u.start..u.end]);
-            if md && found - spans.len() + i < MD_ROWS {
-                let at = format!("{}:{}", shown(&f.path), u.line);
-                let _ = writeln!(out, "- {} {g}: {}", code(&at), code(&text));
-            } else if !fix && !md {
-                let _ = writeln!(
-                    out,
-                    "  {}  {}  {text}",
-                    paint("2", &format!("{at:<w$}")),
-                    paint("33", &format!("{g:<18}")),
-                );
-            }
-        }
-    }
-
-    let mode = MODES[mode as usize];
-    let s = |n: usize| if n == 1 { "" } else { "s" };
-    groups.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
-    let what = |g: &str| {
-        jev::CATS
-            .iter()
-            .find(|c| c.name == g)
-            .map(|c| c.summary)
-            .unwrap_or_default()
-    };
-    let mut stats = format!(
-        "Checked {checked} comment{} in {n} file{} in {:.2}s",
-        s(checked),
-        s(n),
-        t0.elapsed().as_secs_f64()
-    );
-    if judged > 0 {
-        let _ = write!(
-            stats,
-            " · Jev: {asked} asked, {cached} cached, {deduplicated} deduplicated, {}k tokens",
-            tokens / 1000
-        );
-    }
-
-    if md {
-        let mut m = String::new();
-        if !complete {
-            let _ = writeln!(m, "### prolix: check incomplete\n\n{}", errors.join("\n\n"));
-        } else if found == 0 {
-            let _ = writeln!(m, "### ✅ prolix: no comments to remove (mode: {mode})");
-        } else {
-            let did = "found";
-            let rest = if fix { "" } else { " to remove" };
-            let _ = writeln!(
-                m,
-                "### prolix {did} {found} comment{}{rest} (mode: {mode})\n",
-                s(found)
-            );
-            m.push_str("| Count | Category | Description |\n| --: | --- | --- |\n");
-            for (g, c) in &groups {
-                let _ = writeln!(m, "| {c} | `{g}` | {} |", what(g));
-            }
-            let _ = write!(
-                m,
-                "\n<details><summary>{found} comment{} in {found_files} file{}</summary>\n\n{out}",
-                s(found),
-                s(found_files)
-            );
-            if found > MD_ROWS {
-                let _ = writeln!(m, "- …and {} more", found - MD_ROWS);
-            }
-            m.push_str("\n</details>\n");
-            if !fix {
-                let _ = writeln!(
-                    m,
-                    "\nRun `npx @prolix/cli{again} --fix` to apply eligible fixes."
-                );
-            }
-        }
-        if fix && complete {
-            let _ = writeln!(
-                m,
-                "\nApplied {fixed} fixes; {} findings remain for review.",
-                total - fixed
-            );
-        }
-        let _ = writeln!(m, "\n<sub>{stats}</sub>");
-        print!("{m}");
-        return Ok(exit);
-    }
-
-    if !complete {
-        let _ = writeln!(out, "Check incomplete; no fixes applied.");
-    } else if found == 0 {
-        let _ = writeln!(
-            out,
-            "{} No comments to remove (mode: {mode}).",
-            paint("32", "✓")
-        );
-    } else {
-        let verb = "Found";
-        let gap = if out.is_empty() { "" } else { "\n" };
-        let _ = writeln!(
-            out,
-            "{gap}{verb} {found} comment{} in {found_files} file{} (mode: {mode}):\n",
-            s(found),
-            s(found_files)
-        );
-        for (g, c) in &groups {
-            let _ = writeln!(
-                out,
-                "  {c:>5}  {}  {}",
-                paint("33", &format!("{g:<18}")),
-                what(g)
-            );
-        }
-        if !fix {
-            let _ = writeln!(out, "\nRun `prolix{again} --fix` to apply eligible fixes.");
-        }
-    }
-    if fix && complete {
-        let _ = writeln!(
-            out,
-            "Applied {fixed} fixes; {} findings remain for review.",
-            total - fixed
-        );
-    }
-    let _ = writeln!(out, "{}", paint("2", &stats));
-    print!("{out}");
-    Ok(exit)
-}
-
-/// A Markdown code span that survives backticks in `s`.
-fn code(s: &str) -> String {
-    let fence = "`".repeat((1..).find(|&n| !s.contains(&"`".repeat(n))).unwrap());
-    format!("{fence} {s} {fence}")
+            .flat_map(|f| &f.units)
+            .filter_map(|u| u.model.clone())
+            .collect(),
+        model,
+        comments,
+        stats: Stats {
+            files: scanned.into_inner(),
+            comments: checked,
+            flagged: total,
+            asked,
+            cached,
+            deduplicated,
+            skipped,
+            fixed,
+            remaining: total - fixed,
+            unanswered,
+            input_tokens: tokens,
+            elapsed_ms: t0.elapsed().as_millis() as u64,
+        },
+    })
 }
 
 /// A mode's index in `MODES`, also accepting the names the modes had as levels.

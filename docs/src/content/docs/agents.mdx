@@ -29,13 +29,13 @@ Only write a comment when it tells the reader something the code doesn't: why th
 
 | Code | Meaning |
 | --- | --- |
-| 0 | nothing flagged, or `--fix` succeeded |
-| 1 | comments flagged |
-| 2 | error: bad config, missing key or Jev unreachable |
+| 0 | nothing flagged, or all findings fixed |
+| 1 | findings remain, including those without an eligible fix |
+| 2 | error or incomplete check |
 
 ## Machine-readable output
 
-`--reporter json` prints one JSON object. `comments` lists every comment prolix checked. A flagged comment has its category in `group` and a `fix`, which gives the lines to replace (`startLine` to `endLine`, 1-based and inclusive) and their `replacement`. A kept comment has `group: null`. `confidence` is how sure Jev is that the comment is removable in this mode, and `probabilities` has Jev's score for each [category](/reference/modes/):
+`--reporter json` prints one JSON object. `comments` lists every comment prolix checked. A flagged comment has its category in `group`. An eligible `fix` gives the lines to replace (`startLine` to `endLine`, 1-based and inclusive) and their `replacement`. A kept comment has `group: null`. `confidence` is how sure Jev is that the comment is removable in this mode, and `probabilities` has Jev's score for each [category](/reference/modes/):
 
 ```json
 {

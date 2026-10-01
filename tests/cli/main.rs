@@ -55,6 +55,9 @@ struct Server {
 }
 impl Server {
     fn new(reply: impl Fn(Value) -> Value + Send + 'static) -> Self {
+        Self::http(move |_, _, body| reply(body))
+    }
+    fn http(reply: impl Fn(&str, &str, Value) -> Value + Send + 'static) -> Self {
         let socket = TcpListener::bind("127.0.0.1:0").unwrap();
         socket.set_nonblocking(true).unwrap();
         let url = format!("http://{}", socket.local_addr().unwrap());
@@ -79,7 +82,7 @@ impl Server {
                         break i + 4;
                     }
                 };
-                let headers = String::from_utf8_lossy(&bytes[..header_end]);
+                let headers = String::from_utf8_lossy(&bytes[..header_end]).into_owned();
                 let len: usize = headers
                     .lines()
                     .find_map(|s| {
@@ -87,16 +90,22 @@ impl Server {
                             .strip_prefix("content-length:")
                             .map(|v| v.trim().parse().unwrap())
                     })
-                    .unwrap();
+                    .unwrap_or(0);
                 while bytes.len() < header_end + len {
                     let mut b = [0; 8192];
                     let n = connection.read(&mut b).unwrap();
                     assert!(n > 0);
                     bytes.extend_from_slice(&b[..n]);
                 }
-                let body =
-                    reply(serde_json::from_slice(&bytes[header_end..header_end + len]).unwrap())
-                        .to_string();
+                let mut request = headers.lines().next().unwrap().split_whitespace();
+                let method = request.next().unwrap();
+                let path = request.next().unwrap();
+                let input = if len == 0 {
+                    Value::Null
+                } else {
+                    serde_json::from_slice(&bytes[header_end..header_end + len]).unwrap()
+                };
+                let body = reply(method, path, input).to_string();
                 write!(connection, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
             }
         });
@@ -285,4 +294,252 @@ fn unverified_languages_remain_available_for_review() {
     assert_eq!(r["comments"][0]["fixStatus"], "unverified-language");
     assert_eq!(r["comments"][0]["fix"], Value::Null);
     assert_eq!(w.get("a.py"), "# ----\nx = 1\n");
+}
+
+impl Workspace {
+    fn git(&self, args: &[&str]) -> String {
+        let out = Command::new("git")
+            .current_dir(&self.0)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap().trim().into()
+    }
+    fn pull_request() -> (Self, String) {
+        let w = Self::new();
+        w.git(&["init", "-q", "-b", "main"]);
+        w.git(&["config", "user.name", "Prolix Tests"]);
+        w.git(&["config", "user.email", "tests@example.invalid"]);
+        w.git(&["config", "commit.gpgsign", "false"]);
+        w.put("a.ts", "const x = 1;\n");
+        w.git(&["add", "a.ts", "prolix.jsonc"]);
+        w.git(&["commit", "-qm", "base"]);
+        w.git(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        w.git(&["checkout", "-qb", "feature"]);
+        w.put("a.ts", "// Return the value\nfunction f() { return 42; }\n");
+        w.git(&["commit", "-qam", "head"]);
+        let head = w.git(&["rev-parse", "HEAD"]);
+        (w, head)
+    }
+    fn github(&self, args: &[&str], server: &Server, head: &str) -> Command {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_prolix"));
+        cmd.current_dir(&self.0).arg("github").args(args);
+        for key in [
+            "INPUT_MODE",
+            "INPUT_SCOPE",
+            "INPUT_COMMENT",
+            "INPUT_SUGGESTIONS",
+            "INPUT_FAIL",
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+            "GITHUB_OUTPUT",
+            "GITHUB_STEP_SUMMARY",
+            "RUNNER_TEMP",
+            "GITHUB_ACTIONS",
+        ] {
+            cmd.env_remove(key);
+        }
+        cmd.env("TYPESAFE_API_KEY", "test-only")
+            .env("TYPESAFE_BASE_URL", &server.url)
+            .env("TYPESAFE_DEFAULT_MODEL", "mock")
+            .env("GH_TOKEN", "github-test-only")
+            .env("GITHUB_API_URL", &server.url)
+            .env("GITHUB_GRAPHQL_URL", format!("{}/graphql", server.url))
+            .env("GITHUB_REPOSITORY", "owner/repo")
+            .env("PR", "1")
+            .env("HEAD_SHA", head)
+            .env("GITHUB_BASE_REF", "main")
+            .env("HEAD_REPO", "owner/repo")
+            .env("PR_AUTHOR", "developer");
+        cmd
+    }
+}
+fn github_snapshot(head: &str) -> Value {
+    json!({"data":{"viewer":{"login":"github-actions"},"repository":{"pullRequest":{"headRefOid":head,"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}})
+}
+#[test]
+fn github_action_scans_once_and_publishes_matching_summary_and_suggestion() {
+    let (w, head) = Workspace::pull_request();
+    let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let captured = requests.clone();
+    let sha = head.clone();
+    let server = Server::http(move |method, path, body| {
+        captured
+            .lock()
+            .unwrap()
+            .push((method.to_string(), path.to_string(), body.clone()));
+        match path {
+            "/v1/systemone" => answers(&body, 1.0),
+            "/graphql" => github_snapshot(&sha),
+            p if p.contains("?per_page=") => json!([]),
+            _ => json!({"id":99}),
+        }
+    });
+    let out = w
+        .github(&["action", "--action-protocol=1"], &server, &head)
+        .env("RUNNER_TEMP", &w.0)
+        .env("GITHUB_OUTPUT", w.0.join("output"))
+        .env("GITHUB_STEP_SUMMARY", w.0.join("step-summary"))
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let r: Value = serde_json::from_str(&w.get("prolix/report.json")).unwrap();
+    assert_eq!(r["stats"]["asked"], 1);
+    assert_eq!(r["stats"]["flagged"], 1);
+    assert_eq!(w.get("output"), "flagged=1\n");
+    let calls = requests.lock().unwrap();
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|(_, p, _)| p == "/v1/systemone")
+            .count(),
+        1
+    );
+    let summary = &calls
+        .iter()
+        .find(|(m, p, _)| m == "POST" && p == "/repos/owner/repo/issues/1/comments")
+        .unwrap()
+        .2;
+    assert_eq!(
+        summary["body"],
+        format!("<!-- prolix -->\n{}", w.get("step-summary"))
+    );
+    assert!(summary["body"].as_str().unwrap().contains("1 asked"));
+    assert!(summary["body"]
+        .as_str()
+        .unwrap()
+        .contains("--changed=origin/main --fix"));
+    let suggestion = &calls
+        .iter()
+        .find(|(m, p, _)| m == "POST" && p == "/repos/owner/repo/pulls/1/comments")
+        .unwrap()
+        .2;
+    assert_eq!(suggestion["commit_id"], head);
+    assert!(suggestion["body"]
+        .as_str()
+        .unwrap()
+        .contains("```suggestion"));
+    assert_eq!(
+        w.get("a.ts"),
+        "// Return the value\nfunction f() { return 42; }\n"
+    );
+}
+#[test]
+fn github_review_dry_run_does_not_mutate_github() {
+    let (w, head) = Workspace::pull_request();
+    let sha = head.clone();
+    let mutations = Arc::new(AtomicUsize::new(0));
+    let count = mutations.clone();
+    let server = Server::http(move |method, path, body| match path {
+        "/v1/systemone" => answers(&body, 1.0),
+        "/graphql" => {
+            assert!(body["query"].as_str().unwrap().starts_with("query"));
+            github_snapshot(&sha)
+        }
+        _ if method == "GET" => json!([]),
+        _ => {
+            count.fetch_add(1, Ordering::Relaxed);
+            json!({})
+        }
+    });
+    let out = w
+        .github(
+            &["review", "--dry-run", "--bot-login", "github-actions"],
+            &server,
+            &head,
+        )
+        .env("GH_TOKEN", "")
+        .env("GITHUB_TOKEN", "github-test-only")
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let r = report(&out);
+    assert_eq!(r["plan"]["create"].as_array().unwrap().len(), 1);
+    assert_eq!(r["plan"]["summary"]["id"], 0);
+    assert_eq!(mutations.load(Ordering::Relaxed), 0);
+}
+#[test]
+fn github_incomplete_scans_never_call_the_github_api() {
+    let (w, head) = Workspace::pull_request();
+    let server = Server::http(|_, path, _| {
+        assert_eq!(path, "/v1/systemone");
+        json!({"model":"mock-1","answers":{}})
+    });
+    let out = w
+        .github(&["action"], &server, &head)
+        .env("RUNNER_TEMP", &w.0)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let r: Value = serde_json::from_str(&w.get("prolix/report.json")).unwrap();
+    assert_eq!(r["complete"], false);
+}
+#[test]
+fn github_action_flags_and_secret_skip_preserve_existing_behaviour() {
+    let (w, head) = Workspace::pull_request();
+    let server = Server::http(|_, path, body| {
+        assert_eq!(path, "/v1/systemone");
+        answers(&body, 1.0)
+    });
+    let out = w
+        .github(&["action"], &server, &head)
+        .env("INPUT_COMMENT", "false")
+        .env("INPUT_SUGGESTIONS", "false")
+        .env("INPUT_FAIL", "true")
+        .env_remove("GH_TOKEN")
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = w
+        .github(&["action"], &server, &head)
+        .env_remove("TYPESAFE_API_KEY")
+        .env("HEAD_REPO", "fork/repo")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("skipped"));
+}
+#[test]
+fn github_command_validates_options_and_has_help_without_credentials() {
+    let w = Workspace::new();
+    let out = Command::new(env!("CARGO_BIN_EXE_prolix"))
+        .current_dir(&w.0)
+        .args(["github", "review", "--help"])
+        .env_remove("GH_TOKEN")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("--dry-run"));
+    let out = Command::new(env!("CARGO_BIN_EXE_prolix"))
+        .args(["github", "review", "--bot-login", "other", "--pr", "1"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("only with --dry-run"));
+    let out = Command::new(env!("CARGO_BIN_EXE_prolix"))
+        .args(["github", "action", "--action-protocol=2"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("unsupported action protocol"));
 }

@@ -80,3 +80,20 @@ Try a canary build from a pull request to prolix:
     api-key: ${{ secrets.TYPESAFE_API_KEY }}
     version: 0.1.1-canary-abc1234
 ```
+
+## Implementation and local dry runs
+
+The composite action installs Prolix through the existing npm launcher and calls `prolix github action`. Rust owns the scan, shared report types, summary formatting, GitHub API calls and thread reconciliation. Each action run scans once; its summary and suggestions use the same result. The action does not require `gh` or `jq`.
+
+This action revision needs a CLI containing the `github action` command (0.4.0 or a corresponding canary/local build). Its protocol argument makes older CLIs fail explicitly. Keep the action revision and the `version` input compatible.
+
+To inspect a proposed review locally, check out the PR head with full history, set `GH_TOKEN` (or `GITHUB_TOKEN`) and `TYPESAFE_API_KEY`, then run:
+
+```sh
+prolix github review --repository owner/repo --pr 123 \
+  --base origin/main --dry-run --bot-login github-actions
+```
+
+The JSON plan lists summary edits, suggestions, updates and thread resolutions. A dry run reads GitHub and may call Jev, but never posts or resolves anything. `--bot-login` lets a local dry run match the Actions bot's existing threads; it is rejected outside a dry run. Omit it when using the bot's own credentials.
+
+Use `--no-comment` or `--no-suggestions` to disable those parts of the plan, and `--fail-on-findings` to return exit code 1 when findings remain. Incomplete checks return 2. The action preserves its existing advisory behaviour when GitHub posting fails. GitHub Enterprise installations use `GITHUB_API_URL` and `GITHUB_GRAPHQL_URL`.

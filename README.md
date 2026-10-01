@@ -96,6 +96,8 @@ The `flagged` output is the number of comments flagged. The summary also goes to
 
 `ref` and `fetch-depth: 0` check out the pull request's own commits rather than GitHub's merge commit, so suggestions land on the right lines. Without them the action still comments, and warns that it skipped the suggestions.
 
+The action runs the Rust `prolix github action` command through the npm launcher. It scans once and uses shared report types for the summary and review plan. `prolix github review --dry-run` previews proposed GitHub changes locally; run it with `--help` for options. This action revision requires the new command in CLI 0.4.0 or a corresponding canary/local build.
+
 ## Adopting prolix in an existing repo
 
 The action only checks the lines a pull request adds, so turning it on never flags the comments already in a repo. To clear those:
