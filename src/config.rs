@@ -10,6 +10,8 @@ pub struct Config {
     /// The old name for `mode`.
     pub level: Option<String>,
     pub threshold: Option<f32>,
+    #[serde(rename = "fixThreshold")]
+    pub fix_threshold: Option<f32>,
     /// Guidance in plain English on how to judge this project's comments, passed to Jev with each one.
     pub behaviour: Option<String>,
     #[serde(default)]
@@ -29,9 +31,13 @@ pub fn load() -> Result<(Config, PathBuf), String> {
     for dir in cwd.ancestors() {
         for name in ["prolix.jsonc", "prolix.json"] {
             let path = dir.join(name);
-            if let Ok(text) = std::fs::read_to_string(&path) {
-                let cfg = parse(&text).map_err(|e| format!("{}: {e}", path.display()))?;
-                return Ok((cfg, dir.to_path_buf()));
+            match std::fs::read_to_string(&path) {
+                Ok(text) => {
+                    let cfg = parse(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+                    return Ok((cfg, dir.to_path_buf()));
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(format!("{}: {e}", path.display())),
             }
         }
     }
@@ -64,8 +70,13 @@ fn parse(text: &str) -> Result<Config, String> {
         i += 1;
     }
     let mut cfg: Config = serde_json::from_slice(&b).map_err(|e| e.to_string())?;
-    if cfg.threshold.is_some_and(|t| !(0.0..=1.0).contains(&t)) {
-        return Err("threshold must be between 0 and 1".into());
+    for (name, value) in [
+        ("threshold", cfg.threshold),
+        ("fixThreshold", cfg.fix_threshold),
+    ] {
+        if value.is_some_and(|t| !(0.0..=1.0).contains(&t)) {
+            return Err(format!("{name} must be between 0 and 1"));
+        }
     }
     for (key, rules) in [("keep", &cfg.keep), ("remove", &cfg.remove)] {
         for r in rules {

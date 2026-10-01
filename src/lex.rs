@@ -387,7 +387,7 @@ pub fn scan(src: &[u8], lang: &Lang, base: usize, out: &mut Vec<Raw>) {
                 i = heredoc_end(src, i, &src[s..e]);
             }
             if let Some(parent) = yblock.take() {
-                i = yaml_block_end(src, i, parent, base, out);
+                i = yaml_block_end(src, i, parent);
             }
             continue;
         }
@@ -418,7 +418,7 @@ pub fn scan(src: &[u8], lang: &Lang, base: usize, out: &mut Vec<Raw>) {
             }
         }
         if let Some(m) = lang.line.iter().find(|m| rest.starts_with(m.as_bytes())) {
-            if line_ok(src, i, m.as_bytes()[0], lang.kind) {
+            if line_ok(src, i, m.as_bytes()[0], lang) {
                 if let Some(end) = (lang.kind == Kind::Lua)
                     .then(|| lua_long(src, i + 2))
                     .flatten()
@@ -542,15 +542,16 @@ fn is_ident(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_' || b == b'$' || b >= 0x80
 }
 
-fn line_ok(s: &[u8], i: usize, m0: u8, kind: Kind) -> bool {
+fn line_ok(s: &[u8], i: usize, m0: u8, lang: &Lang) -> bool {
     let Some(&b) = i.checked_sub(1).map(|k| &s[k]) else {
         return true;
     };
     match m0 {
         _ if b == b'\\' => false,
         // `$#`, `a#b` and `#fff`-style tokens aren't comments.
+        b'#' if matches!(lang.name, "Python" | "Ruby") => true,
         b'#' => b.is_ascii_whitespace(),
-        b'/' => b != b':' && !(kind == Kind::Css && b == b'('),
+        b'/' => b != b':' && !(lang.kind == Kind::Css && b == b'('),
         _ => true,
     }
 }
@@ -741,9 +742,8 @@ fn heredoc_end(s: &[u8], mut j: usize, tag: &[u8]) -> usize {
 }
 
 /// Skips a block scalar opened on a line indented `parent` spaces. Its first non-blank line sets the indent the rest
-/// keep, and blank lines in between belong to it. Its text isn't read as code, but a line of `# words` is taken for a
-/// comment in an embedded script. `## Heading` stays Markdown.
-fn yaml_block_end(s: &[u8], mut j: usize, parent: usize, base: usize, out: &mut Vec<Raw>) -> usize {
+/// keep, and blank lines in between belong to it. Scalar contents are data, including lines starting with `#`.
+fn yaml_block_end(s: &[u8], mut j: usize, parent: usize) -> usize {
     let mut indent = None;
     while j < s.len() {
         let e = s[j..]
@@ -757,13 +757,6 @@ fn yaml_block_end(s: &[u8], mut j: usize, parent: usize, base: usize, out: &mut 
             let want = *indent.get_or_insert(ind);
             if ind <= parent || ind < want {
                 return j;
-            }
-            if t.starts_with(b"# ") || t == b"#" {
-                out.push(Raw {
-                    start: base + j + ind,
-                    end: base + j + ind + t.len(),
-                    line: true,
-                });
             }
         }
         j = e + 1;
@@ -866,7 +859,7 @@ x = y // yes4
         let y = "a: |\n  ### no\n  x # no\n\n  # yes\n# yes2\nb: >- # yes3\n  ## no\nsteps:\n  - run: |\n      echo # no\n  # yes4\nc: x | y # yes5\n";
         assert_eq!(
             comments(y, "a.yml"),
-            ["# yes", "# yes2", "# yes3", "# yes4", "# yes5"]
+            ["# yes2", "# yes3", "# yes4", "# yes5"]
         );
     }
 

@@ -3,8 +3,14 @@ pub fn apply(src: &str, spans: &[(usize, usize)], jsx: bool) -> String {
     let b = src.as_bytes();
     let mut out = String::with_capacity(src.len());
     let mut cur = 0;
+    let wrappers = if jsx {
+        crate::syntax::jsx_wrappers(src)
+    } else {
+        Default::default()
+    };
     for &(s, e) in spans {
-        let (s, e) = if jsx { braces(b, s, e) } else { (s, e) };
+        let wrapped = wrappers.contains_key(&(s, e));
+        let (s, e) = wrappers.get(&(s, e)).copied().unwrap_or((s, e));
         let (ls, le) = (line_start(b, s), line_end(b, e));
         let eol = if le > e && b[le - 1] == b'\r' {
             le - 1
@@ -29,6 +35,23 @@ pub fn apply(src: &str, spans: &[(usize, usize)], jsx: bool) -> String {
             && s > 0
             && is_word(b[s - 1])
             && b.get(e).is_some_and(|&c| is_word(c))
+        {
+            fill = " ";
+        }
+        if !own && src[s..e].contains('\n') {
+            fill = if src[s..e].contains("\r\n") {
+                "\r\n"
+            } else {
+                "\n"
+            };
+        } else if !own
+            && !wrapped
+            && s > 0
+            && e < b.len()
+            && !b[s - 1].is_ascii_whitespace()
+            && !b[e].is_ascii_whitespace()
+            && !b"([{,;".contains(&b[s - 1])
+            && !b")]}.,;".contains(&b[e])
         {
             fill = " ";
         }
@@ -71,30 +94,6 @@ pub fn suggestion(src: &str, span: (usize, usize), jsx: bool) -> (usize, usize, 
         .take(a.len().min(b.len()) - pre);
     let suf = suf.take_while(|(x, y)| x == y).count();
     (pre + 1, a.len() - suf, b[pre..b.len() - suf].join("\n"))
-}
-
-/// Widens `{/* ... */}` to include its braces when that is a whole line or a JSX child.
-fn braces(b: &[u8], s: usize, e: usize) -> (usize, usize) {
-    let a = s - ws_len_back(b, s);
-    let z = e + b[e..].iter().take_while(|&&c| c == b' ').count();
-    if a == 0 || b[a - 1] != b'{' || b.get(z) != Some(&b'}') {
-        return (s, e);
-    }
-    let (bs, be) = (a - 1, z + 1);
-    let alone = line_start(b, bs) == bs - ws_len_back(b, bs)
-        && b[be..line_end(b, be)].iter().all(u8::is_ascii_whitespace);
-    let prev = b[..bs].iter().rposition(|c| !c.is_ascii_whitespace());
-    let next = b[be..]
-        .iter()
-        .position(|c| !c.is_ascii_whitespace())
-        .map(|k| b[be + k]);
-    let child =
-        prev.is_some_and(|p| b[p] == b'>' && (p == 0 || b[p - 1] != b'=')) && next == Some(b'<');
-    if alone || child {
-        (bs, be)
-    } else {
-        (s, e)
-    }
 }
 
 pub fn line_start(b: &[u8], i: usize) -> usize {

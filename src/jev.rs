@@ -173,6 +173,7 @@ pub fn model() -> String {
 pub struct Outcome {
     pub probs: Vec<Option<Vec<f32>>>,
     pub tokens: u64,
+    pub models: Vec<Option<String>>,
     pub error: Option<String>,
 }
 
@@ -205,6 +206,7 @@ pub fn classify(qs: &[Value], names: &[&str], key: &str) -> Outcome {
     let used = AtomicU64::new(0);
     let error = Mutex::new(None);
     let probs = Mutex::new(vec![None; qs.len()]);
+    let models = Mutex::new(vec![None; qs.len()]);
     std::thread::scope(|s| {
         for _ in 0..WORKERS.min(batches.len()) {
             s.spawn(|| loop {
@@ -221,8 +223,14 @@ pub fn classify(qs: &[Value], names: &[&str], key: &str) -> Outcome {
                     Ok(v) => {
                         used.fetch_add(v["usage"]["input_tokens"].as_u64().unwrap_or(0), Relaxed);
                         let mut probs = probs.lock().unwrap();
+                        let mut models = models.lock().unwrap();
                         for i in batches[b].clone() {
                             probs[i] = parse(&v["answers"][i.to_string()], names);
+                            models[i] = v["model"].as_str().filter(|m| !m.is_empty()).map(String::from);
+                            if probs[i].is_none() || models[i].is_none() {
+                                probs[i] = None;
+                                error.lock().unwrap().get_or_insert_with(|| format!("Jev returned an incomplete or invalid answer for question {i}"));
+                            }
                         }
                     }
                     Err(e) => {
@@ -235,26 +243,48 @@ pub fn classify(qs: &[Value], names: &[&str], key: &str) -> Outcome {
     });
     Outcome {
         probs: probs.into_inner().unwrap(),
+        models: models.into_inner().unwrap(),
         tokens: used.into_inner(),
         error: error.into_inner().unwrap(),
     }
 }
 
+fn valid(p: &[f32], len: usize) -> bool {
+    p.len() == len
+        && p.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+        && (p.iter().sum::<f32>() - 1.0).abs() <= 0.02
+}
+
 fn parse(a: &Value, names: &[&str]) -> Option<Vec<f32>> {
-    let probs = a["probabilities"].as_object();
-    let choice = a["choice"].as_str();
-    if probs.is_none() && choice.is_none() {
+    let probabilities = a["probabilities"].as_object()?;
+    if probabilities.len() != names.len() {
         return None;
     }
-    Some(
-        names
-            .iter()
-            .map(|&n| match probs {
-                Some(p) => p.get(n).and_then(Value::as_f64).unwrap_or(0.0) as f32,
-                None => f32::from(choice == Some(n)),
-            })
-            .collect(),
-    )
+    let p: Option<Vec<_>> = names
+        .iter()
+        .map(|n| probabilities.get(*n)?.as_f64().map(|v| v as f32))
+        .collect();
+    p.filter(|p| valid(p, names.len()))
+}
+
+pub fn prompt_hash() -> String {
+    static HASH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    HASH.get_or_init(|| {
+        format!(
+            "{:016x}",
+            hash(&[
+                PROMPT_VERSION,
+                STATE,
+                &question("", "", "", None, &criteria()).to_string(),
+                &question("", "", "", Some(""), &criteria()).to_string()
+            ])
+        )
+    })
+    .clone()
+}
+
+pub fn endpoint() -> String {
+    std::env::var("TYPESAFE_BASE_URL").unwrap_or_else(|_| "https://api.typesafe.ai".into())
 }
 
 fn post(agent: &ureq::Agent, url: &str, key: &str, body: &Value) -> Result<Value, String> {
@@ -313,13 +343,21 @@ pub fn hash(parts: &[&str]) -> u64 {
     h
 }
 
-pub type Cache = HashMap<String, Vec<f32>>;
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct Cached {
+    pub probabilities: Vec<f32>,
+    pub model: String,
+}
+pub type Cache = HashMap<String, Cached>;
 
 pub fn load_cache(path: &Path) -> Cache {
     std::fs::read(path)
         .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
+        .and_then(|b| serde_json::from_slice::<Cache>(&b).ok())
         .unwrap_or_default()
+        .into_iter()
+        .filter(|(_, c)| !c.model.is_empty() && valid(&c.probabilities, CATS.len()))
+        .collect()
 }
 
 // ponytail: the cache only grows; prune by last-seen run if it ever gets large.
@@ -328,5 +366,29 @@ pub fn save_cache(path: &Path, cache: &Cache) {
     let _ = path.parent().map(std::fs::create_dir_all);
     if serde_json::to_vec(cache).is_ok_and(|b| std::fs::write(&tmp, b).is_ok()) {
         let _ = std::fs::rename(&tmp, path);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn rejects_incomplete_and_invalid_distributions() {
+        let names = ["a", "b"];
+        for value in [
+            json!({}),
+            json!({"choice":"a"}),
+            json!({"probabilities":{"a":1}}),
+            json!({"probabilities":{"a":2,"b":-1}}),
+            json!({"probabilities":{"a":0.1,"b":0.1}}),
+            json!({"probabilities":{"a":1,"unexpected":0}}),
+        ] {
+            assert!(parse(&value, &names).is_none(), "{value}");
+        }
+        assert_eq!(
+            parse(&json!({"probabilities":{"a":0.7,"b":0.3}}), &names),
+            Some(vec![0.7, 0.3])
+        );
+        assert!(!valid(&[f32::NAN, 1.0], 2));
     }
 }

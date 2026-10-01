@@ -3,10 +3,16 @@
   "title": "prolix configuration",
   "type": "object",
   "properties": {
-    "$schema": { "type": "string" },
+    "$schema": {
+      "type": "string"
+    },
     "mode": {
       "description": "How strict to be about comments. keep and remove apply on top.",
-      "enum": ["off", "standard", "strict"],
+      "enum": [
+        "off",
+        "standard",
+        "strict"
+      ],
       "enumDescriptions": [
         "Keep every comment unless remove names its category.",
         "Remove comments that restate the code, disabled code, banners, change notes and signature-only docs.",
@@ -16,19 +22,27 @@
     },
     "level": {
       "description": "The old name for mode.",
-      "enum": ["all", "value-add", "necessary"],
+      "enum": [
+        "all",
+        "value-add",
+        "necessary"
+      ],
       "deprecated": true,
       "deprecationMessage": "Use \"mode\" instead: all is off, value-add is standard, necessary is strict."
     },
     "keep": {
       "description": "Categories to keep whatever the mode.",
       "type": "array",
-      "items": { "$ref": "#/definitions/category" }
+      "items": {
+        "$ref": "#/definitions/category"
+      }
     },
     "remove": {
       "description": "Categories to remove whatever the mode.",
       "type": "array",
-      "items": { "$ref": "#/definitions/category" }
+      "items": {
+        "$ref": "#/definitions/category"
+      }
     },
     "behaviour": {
       "description": "How your team judges its comments, in plain English. Jev weighs it when it picks each comment's category.",
@@ -44,7 +58,16 @@
     "ignore": {
       "description": "Globs to skip, relative to this file, on top of .gitignore.",
       "type": "array",
-      "items": { "type": "string" }
+      "items": {
+        "type": "string"
+      }
+    },
+    "fixThreshold": {
+      "description": "Minimum removal probability for an automatic fix or PR suggestion. Uses the higher of this value and threshold. Fixes require a validated JS/TS/JSX/TSX edit.",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "default": 0.9
     }
   },
   "additionalProperties": false,
