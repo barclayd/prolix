@@ -140,6 +140,7 @@ Tool and compiler directives are never touched. prolix recognises them by shape 
 - tags and settings: `@ts-expect-error`, `$FlowFixMe`, `# shellcheck source=lib.sh`, `# syntax=docker/dockerfile:1`, `/* webpackChunkName: "x" */`
 - version pins beside a hash, as in `uses: actions/checkout@<sha> # v4.1.1`
 - shebangs, pragmas, regions, `/*!` licence headers, `@generated` markers and `/// <reference>`
+- server-side includes in any server's spelling, such as `<!--#include virtual="/nav" -->`, `<!--# echo var="x" -->` or `<!-- #include file="a.inc" -->`, along with any run of line comments that quotes one
 
 Add `prolix-ignore` to any comment to keep it.
 
