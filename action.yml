@@ -23,7 +23,7 @@ inputs:
     description: Post a summary comment when comments are flagged, and keep it up to date on later runs.
     default: "true"
   suggestions:
-    description: Post each flagged comment as a review suggestion that removes it in one click. Needs scope `changed` and the pull request's head checked out with full history.
+    description: Post validated fixes as one-click review suggestions and resolve obsolete Prolix threads on reruns. Needs scope `changed` and the pull request's head checked out with full history.
     default: "true"
   fail-on-findings:
     description: Fail the job when comments are flagged.
@@ -64,8 +64,10 @@ runs:
 
         # One summary comment per pull request, found by its marker. `sticky 1` creates it if it isn't there yet.
         sticky() {
-          local marker='<!-- prolix -->' id
-          id=$(gh api --paginate "$api/issues/$PR/comments" --jq ".[] | select(.body | startswith(\"$marker\")) | .id") || return
+          local marker='<!-- prolix -->' id bot
+          bot=$(gh api graphql -f query='{viewer{login}}' --jq '.data.viewer.login') || return
+          bot=${bot%\[bot\]}
+          id=$(gh api --paginate "$api/issues/$PR/comments" --jq ".[] | select(.user.type == \"Bot\" and (.user.login == \"$bot\" or .user.login == \"$bot[bot]\")) | select(.body | startswith(\"$marker\")) | .id") || return
           id=${id%%$'\n'*}
           { echo "$marker"; cat "$out/summary.md"; } > "$out/comment.md"
           if [ -n "$id" ]; then
@@ -130,35 +132,8 @@ runs:
         flagged=$(jq .stats.flagged "$out/report.json")
         echo "flagged=$flagged" >> "$GITHUB_OUTPUT"
 
-        # Posts suggestions not already on the pull request, then deletes earlier ones that no longer apply.
-        # ponytail: one review for all suggestions, so a single line outside the diff's hunks (an old line inside a long comment
-        # block) fails the lot with a 422. Post one review per comment if that shows up.
         suggest() {
-          gh api --paginate "$api/pulls/$PR/comments" > "$out/old.json" || return
-          jq -n --arg m '<!-- prolix:suggestion -->' --arg sha "$HEAD_SHA" \
-            --slurpfile pages "$out/old.json" --slurpfile report "$out/report.json" '
-            def key: "\(.path):\(.line):\(.body)";
-            [$pages[][] | select(.body | startswith($m))] as $old
-            | [$report[0].comments[] | select(.group and .fix) | {
-                path,
-                line: .fix.endLine,
-                side: "RIGHT",
-                body: ("\($m)\n**prolix**: `\(.group)`. Commit the suggestion to remove it.\n\n```suggestion\n"
-                  + (if .fix.replacement == "" then "" else .fix.replacement + "\n" end) + "```")
-              } + (if .fix.startLine < .fix.endLine then {start_line: .fix.startLine, start_side: "RIGHT"} else {} end)
-            ] as $new
-            | ($old | map(key)) as $have
-            | ($new | map(key)) as $want
-            | {
-                delete: [$old[] | select(key | IN($want[]) | not) | .id],
-                review: {commit_id: $sha, event: "COMMENT", comments: [$new[] | select(key | IN($have[]) | not)][:50]}
-              }' > "$out/plan.json" || return
-          if [ "$(jq '.review.comments | length' "$out/plan.json")" -gt 0 ]; then
-            jq .review "$out/plan.json" | gh api "$api/pulls/$PR/reviews" --input - > /dev/null || return
-          fi
-          for id in $(jq '.delete[]' "$out/plan.json"); do
-            gh api -X DELETE "$api/pulls/comments/$id" > /dev/null || return
-          done
+          node "$GITHUB_ACTION_PATH/action/reviews.mjs" "$out/report.json"
         }
 
         if [ -n "$PR" ] && [ "$INPUT_COMMENT" = true ]; then
