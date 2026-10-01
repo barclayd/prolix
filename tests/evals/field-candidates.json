@@ -1,0 +1,54 @@
+{
+  "status": "needs-human-review",
+  "note": "Anonymized patterns from the October 2026 repository assessment. These are development candidates, not an independent held-out accuracy claim. Obtain two reviewer labels before moving examples into a separate evaluation corpus.",
+  "cases": [
+    {
+      "id": "banner-with-filter-rationale",
+      "file": "errors.ts",
+      "source": "export const ignored = [\n  // ---- Missing stacks: the frame filter cannot attribute these. ----\n  'Script error.',\n];\n",
+      "comment": "Missing stacks",
+      "proposedCategories": ["explains-why", "warning"],
+      "reviewers": []
+    },
+    {
+      "id": "integration-contract",
+      "file": "plugin.ts",
+      "source": "/** Development plugin. baseUrl points to the external fragment renderer. */\nexport const plugin = (baseUrl: string) => ({ name: 'fragments', apply: 'serve', url: baseUrl });\n",
+      "comment": "Development plugin",
+      "proposedCategories": ["api-doc", "clarifies"],
+      "reviewers": []
+    },
+    {
+      "id": "third-party-side-effect",
+      "file": "boot.sh",
+      "source": "# The launcher populates APP_RUNTIME_CONFIG from the schema before starting the server.\nlauncher run -- node server.js\n",
+      "comment": "launcher populates",
+      "proposedCategories": ["clarifies", "explains-why"],
+      "reviewers": []
+    },
+    {
+      "id": "browser-history-invariant",
+      "file": "history.ts",
+      "source": "// A restored history entry can revive this DOM without mounting the component again.\nwindow.addEventListener('pageshow', restore);\n",
+      "comment": "restored history entry",
+      "proposedCategories": ["explains-why", "warning"],
+      "reviewers": []
+    },
+    {
+      "id": "mixed-filler-and-warning",
+      "file": "payment.ts",
+      "source": "// Save the payment.\n// Acknowledging before this write completes can permanently lose a payment on crash.\nawait persist(payment);\nack();\n",
+      "comment": "Save the payment",
+      "proposedCategories": ["warning", "explains-why"],
+      "reviewers": []
+    },
+    {
+      "id": "short-redundant-jsdoc",
+      "file": "user.ts",
+      "source": "/** Gets a user.\n * @returns User\n */\nfunction getUser(): User { return user; }\n",
+      "comment": "Gets a user",
+      "proposedCategories": ["redundant-doc"],
+      "reviewers": []
+    }
+  ]
+}

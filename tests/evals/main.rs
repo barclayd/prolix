@@ -206,12 +206,20 @@ fn run(
     config: &str,
     modes: &[&str],
 ) -> Result<Vec<Value>, String> {
+    let path = Path::new(file);
+    if path
+        .components()
+        .any(|c| !matches!(c, std::path::Component::Normal(_)))
+    {
+        return Err("fixture paths must be relative and cannot contain '..'".into());
+    }
     let tmp = std::env::temp_dir().join(format!(
-        "prolix-eval-{}-{repeat}-{file}",
-        std::process::id()
+        "prolix-eval-{}-{repeat}-{:016x}",
+        std::process::id(),
+        jev::hash(&[file, config, &modes.join(",")])
     ));
     let _ = std::fs::remove_dir_all(&tmp);
-    std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(tmp.join(path).parent().unwrap()).map_err(|e| e.to_string())?;
     std::fs::write(tmp.join(file), src).map_err(|e| e.to_string())?;
     // Stops the config search from finding a prolix.jsonc above the temp directory.
     std::fs::write(tmp.join("prolix.jsonc"), config).map_err(|e| e.to_string())?;
@@ -245,7 +253,10 @@ fn git(args: &[&str]) -> String {
 #[test]
 #[ignore = "calls Jev; needs TYPESAFE_API_KEY"]
 fn evals() {
-    let dir = Path::new(DIR);
+    let dataset_dir = std::env::var_os("EVAL_DATASET_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| Path::new(DIR).to_path_buf());
+    let dir = dataset_dir.as_path();
     let cases = read(dir.join("cases.json"));
     let labels: Labels = serde_json::from_str(&cases).expect("cases.json");
     let behaviour_json = read(dir.join("behaviour.json"));
@@ -263,6 +274,7 @@ fn evals() {
         ),
     ];
     let policy: Value = serde_json::from_str(&read(dir.join("policy.json"))).expect("policy.json");
+    let dataset_kind = policy["datasetKind"].as_str().unwrap_or("development");
     let repeat: usize = std::env::var("EVAL_REPEAT").map_or(3, |v| v.parse().expect("EVAL_REPEAT"));
     assert!((1..=5).contains(&repeat), "EVAL_REPEAT must be 1-5");
     assert!(
@@ -308,6 +320,8 @@ fn evals() {
     // Decisions for the categories, then for the behaviour.
     let (mut decisions, mut problems, mut ms) = ([Vec::new(), Vec::new()], Vec::new(), Vec::new());
     let (mut tokens, mut model, mut threshold) = (0, String::new(), 0.0);
+    let mut resolved_models = std::collections::BTreeSet::new();
+    let mut prompt_hash = String::new();
     for r in 0..repeat {
         let runs: Vec<_> = std::thread::scope(|s| {
             let handles: Vec<_> = fixtures
@@ -329,6 +343,14 @@ fn evals() {
                         .sum::<u64>();
                     ms.push(reports[0]["stats"]["elapsedMs"].as_u64().unwrap_or(0));
                     model = reports[0]["model"].as_str().unwrap_or_default().to_string();
+                    prompt_hash = reports[0]["promptHash"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string();
+                    if let Some(models) = reports[0]["resolvedModels"].as_array() {
+                        resolved_models
+                            .extend(models.iter().filter_map(Value::as_str).map(String::from));
+                    }
                     threshold = reports[0]["threshold"].as_f64().unwrap_or_default();
                     problems.extend(grade(f, &sets[*set].0[f], &reports, &mut decisions[*set]));
                 }
@@ -529,14 +551,15 @@ fn evals() {
             let _ = writeln!(md, "- {g}");
         }
     }
-    md += "\nSynthetic development set, not a production accuracy guarantee. Each run starts with an empty cache.\n";
+    let _ = writeln!(md, "\nDataset kind: `{dataset_kind}`. Results describe this corpus, not a production accuracy guarantee. Each run starts with an empty cache.");
 
     let out = dir.join("results").join(run_id.to_string());
     std::fs::create_dir_all(&out).unwrap();
     let report = json!({
         "metadata": {
             "run": run_id, "commit": commit, "dirty": dirty, "model": model, "threshold": threshold,
-            "repeat": repeat, "promptVersion": jev::PROMPT_VERSION, "datasetHash": dataset,
+            "repeat": repeat, "promptVersion": jev::PROMPT_VERSION, "promptHash": prompt_hash, "resolvedModels": resolved_models, "datasetHash": dataset,
+            "datasetKind": dataset_kind,
             "jevHash": format!("{:016x}", jev::hash(&[&read(concat!(env!("CARGO_MANIFEST_DIR"), "/src/jev.rs"))])),
         },
         "gates": { "passed": passed, "failures": gates },
@@ -564,6 +587,18 @@ fn evals() {
     }
     println!("{md}\nReport: {}", out.join("report.json").display());
     assert!(passed, "{}", gates.join("\n"));
+}
+
+#[test]
+fn nested_fixtures_and_policies_run_in_isolation() {
+    let src = "// ---\nconst x = 1;\n";
+    std::thread::scope(|s| {
+        let standard = s.spawn(|| run("nested/a.ts", src, 0, "{}", &["standard"]));
+        let off = s.spawn(|| run("nested/a.ts", src, 0, r#"{"mode":"off"}"#, &["off"]));
+        assert_eq!(standard.join().unwrap().unwrap()[0]["stats"]["flagged"], 1);
+        assert_eq!(off.join().unwrap().unwrap()[0]["stats"]["flagged"], 0);
+    });
+    assert!(run("../escape.ts", src, 0, "{}", &["standard"]).is_err());
 }
 
 #[test]

@@ -2,7 +2,7 @@
 
 A fast, language-agnostic linter for comments that don't earn their place: ones that restate the code, commented-out code, banners, change notes and signature-only docs. LLM-written code is full of them.
 
-prolix finds every comment in a repo with a byte-level lexer (40+ languages), asks [Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev) what kind of comment each one is, and flags the ones your mode doesn't keep. `prolix --fix` removes them, including the lines and blank-line gaps they leave behind.
+prolix extracts JS/TS/JSX/TSX comments with a parser and uses a byte-level lexer for 40+ other languages, asks [Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev) what kind of comment each one is, and flags the ones your mode doesn't keep. `prolix --fix` applies eligible JS/TS/JSX/TSX removals after checking that executable syntax and literal content are preserved. Other languages remain available for review.
 
 **[Docs](https://prolix.barclaysd.workers.dev)**, with prompts to hand to your coding agent for [setting it up](https://prolix.barclaysd.workers.dev/setup/) and [cleaning up an existing repo](https://prolix.barclaysd.workers.dev/adopt/).
 
@@ -19,7 +19,7 @@ Found 3 comments in 1 file (mode: standard):
       1  commented-out-code  disabled code left behind
       1  change-note         narrates an edit instead of the code as it is
 
-Run `prolix --fix` to remove them.
+Run `prolix --fix` to apply eligible fixes.
 Checked 214 comments in 38 files in 0.61s · Jev: 214 asked, 0 cached, 228k tokens
 ```
 
@@ -41,26 +41,26 @@ Releases use [changesets](https://github.com/changesets/changesets). Run `npx ch
 export TYPESAFE_API_KEY=...        # from typesafe.ai
 prolix                             # check the current directory
 prolix src lib --mode strict       # check specific paths in strict mode
-prolix --fix                       # remove everything flagged
+prolix --fix                       # apply validated fixes; review remaining findings
 prolix --changed=main              # only comments on lines added since the branch left main
 prolix --changed --fix             # remove flagged comments in uncommitted changes, e.g. in a pre-commit hook
 prolix --reporter json             # machine-readable output with Jev's probabilities and each fix
 prolix --reporter markdown         # a summary for a pull request comment or job summary
 ```
 
-`--changed` reads `git diff` against the merge base with the ref (default `HEAD`). It counts uncommitted edits and untracked files, and only sends Jev the comments that touch added lines. In the JSON report, each flagged comment's `fix` gives the lines to replace (`startLine` to `endLine`) and their `replacement`, which is what the GitHub Action posts as a suggestion.
+`--changed` reads `git diff` against the merge base with the ref (default `HEAD`). It counts uncommitted edits and untracked files, and only sends Jev the comments that touch added lines. In the JSON report, each eligible finding's `fix` gives the lines to replace (`startLine` to `endLine`) and their `replacement`, which is what the GitHub Action posts as a suggestion.
 
-The walk respects `.gitignore`, `.ignore` and hidden files, and skips files over 1 MB (such as minified bundles).
+The walk respects `.gitignore`, `.ignore` and hidden files, and excludes files over 1 MB. Excluding a supported oversized file marks the check incomplete; add intentional exclusions to `ignore`.
 
 | Exit code | Meaning |
 | --- | --- |
-| 0 | nothing flagged, or `--fix` succeeded |
-| 1 | comments flagged |
-| 2 | error (bad config, missing key, Jev unreachable) |
+| 0 | nothing flagged, or all findings fixed |
+| 1 | findings remain, including those without an eligible fix |
+| 2 | error or incomplete check (including invalid source, unreadable files, oversized comments or missing Jev answers) |
 
 ## GitHub Action
 
-The action runs prolix on the lines a pull request adds. When it flags something, it posts a summary comment and a one-click suggestion to remove each comment. Later runs update the same comment (to ✅ once the pull request is clean), don't repeat suggestions and delete ones that no longer apply.
+The action runs prolix on the lines a pull request adds. When it flags something, it posts a summary comment and one-click suggestions for findings with validated fixes. Later runs update the same comment (to ✅ once the pull request is clean), reuse existing suggestions and resolve their review threads once the underlying finding no longer applies.
 
 ```yaml
 # .github/workflows/prolix.yml
@@ -107,7 +107,7 @@ The action only checks the lines a pull request adds, so turning it on never fla
    npx @prolix/cli --fix
    ```
 
-3. For a stricter bar, set `"mode": "strict"` in `prolix.jsonc` and run `--fix` again. It removes TODOs and clarifying comments too.
+3. For a stricter bar, set `"mode": "strict"` in `prolix.jsonc` and run `--fix` again. Strict mode also flags TODOs and clarifying comments; only eligible fixes are applied.
 
 ## Modes and behaviour
 
@@ -136,7 +136,7 @@ Plain-English rules in `keep` and `remove`, from 0.2, still work with a warning:
 Tool and compiler directives are never touched. prolix recognises them by shape rather than by a list of tool names, so a linter it has never heard of is still respected:
 
 - a switch word joined to a name or followed by a rule: `eslint-disable-next-line`, `react-doctor-disable-line`, `biome-ignore`, `# hadolint ignore=DL3008`, `/* c8 ignore next */`
-- `no…` markers and `tool:setting` tokens: `# noqa: E501`, `// NOLINTNEXTLINE`, `# rubocop:disable`, `//go:build`, `// gitleaks:allow`
+- recognised `noqa`, `nolint`, `nosec` and `NOSONAR` markers and `tool:setting` tokens: `# noqa: E501`, `// NOLINTNEXTLINE`, `# rubocop:disable`, `//go:build`, `// gitleaks:allow`
 - tags and settings: `@ts-expect-error`, `$FlowFixMe`, `# shellcheck source=lib.sh`, `# syntax=docker/dockerfile:1`, `/* webpackChunkName: "x" */`
 - version pins beside a hash, as in `uses: actions/checkout@<sha> # v4.1.1`
 - shebangs, pragmas, regions, `/*!` licence headers, `@generated` markers and `/// <reference>`
@@ -153,6 +153,8 @@ Add `prolix-ignore` to any comment to keep it.
   "mode": "standard",
   // How sure Jev must be (0-1) that a comment is removable before flagging it.
   "threshold": 0.6,
+  // Higher bar for automatic edits and review suggestions.
+  "fixThreshold": 0.9,
   // Globs relative to this file, on top of .gitignore.
   "ignore": ["vendor/**", "**/*.generated.ts"]
 }
@@ -168,9 +170,9 @@ Add `prolix-ignore` to any comment to keep it.
 | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` |
 | `TYPESAFE_DEFAULT_MODEL` | `jev-latest` |
 
-Each comment is sent with a few lines of surrounding code. prolix batches up to 32 comments per request and sends up to 16 requests in parallel. It retries rate limits and 5xx responses with backoff.
+Each comment is sent with a few lines of surrounding code. Blocks over 2,000 bytes are kept without judgment and mark the check incomplete. Identical pending questions are deduplicated. prolix batches up to 32 comments per request and sends up to 16 requests in parallel. It retries rate limits and 5xx responses with backoff.
 
-Answers are cached by comment, context, language, model and `behaviour` in `node_modules/.cache/prolix.json`, or in `.prolixcache` when there is no `node_modules`. Re-runs only ask about new or changed comments, and switching modes needs no new calls.
+Validated answers and their resolved model versions are cached by comment, context, language, requested model, API endpoint, prompt hash and `behaviour` in `node_modules/.cache/prolix.json`, or in `.prolixcache` when there is no `node_modules`. Re-runs only ask about new or changed comments, and switching modes needs no new calls.
 
 ## Evals
 
@@ -205,7 +207,11 @@ The report gives, for `standard`, `strict` and the behaviour:
 
 ## Known limits
 
-- Comment-like text inside JSX (for example `<p>a // b</p>`) is guarded for `//` but not for `/*`.
+- Automatic fixes and PR suggestions currently require parser-validated JS/TS/JSX/TSX. Other languages produce review findings without fixes.
+- YAML scalar contents are treated as data; embedded scripts inside them are not linted.
+- `fixThreshold` defaults to 0.9, separately from the 0.6 reporting threshold. This is a conservative starting policy, not a calibrated accuracy guarantee.
 - `{/* */}` comments in Svelte and Astro templates aren't linted.
 - C++ raw strings (`R"(...)"`) aren't recognised.
 - The cache only grows. Delete it to reset.
+
+Review-thread reconciliation is tested with mocked GitHub responses (`node --test action/reviews.test.mjs`). Offline CLI tests cover code/data boundaries, incomplete responses, long comments, cache deduplication and edits during inference. For independently reviewed real-world corpora, run the eval harness with `EVAL_DATASET_DIR=/absolute/path/to/corpus`; see [the evaluation workflow](tests/evals/README.md).

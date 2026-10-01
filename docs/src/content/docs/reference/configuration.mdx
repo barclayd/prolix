@@ -17,6 +17,7 @@ prolix reads `prolix.jsonc`, or `prolix.json`, from the current directory or the
   "behaviour": "Keep comments that state a fact the code relies on but can't show.",
   // How sure Jev must be (0-1) that a comment is removable before flagging it.
   "threshold": 0.6,
+  "fixThreshold": 0.9,
   // Globs relative to this file, on top of .gitignore.
   "ignore": ["vendor/**", "**/*.generated.ts"]
 }
@@ -29,6 +30,7 @@ prolix reads `prolix.jsonc`, or `prolix.json`, from the current directory or the
 | `remove` | `[]` | Categories to remove whatever the mode. |
 | `behaviour` | | How your team judges its comments, in plain English, for Jev to weigh when it picks each comment's category. See [Behaviour](/reference/modes/#behaviour). |
 | `threshold` | `0.6` | How sure Jev must be, from 0 to 1, that a comment is removable before it's flagged. Raise it to flag less. |
+| `fixThreshold` | `0.9` | Minimum score for automatic fixes and suggestions; never lower than `threshold`. Fixes also require validated JS/TS/JSX/TSX syntax. |
 | `ignore` | `[]` | Globs to skip, relative to the file, on top of `.gitignore` and `.ignore`. |
 
 Unknown settings are an error, so a typo fails loudly rather than being ignored. With `@prolix/cli` installed, `"$schema": "./node_modules/@prolix/cli/configuration_schema.json"` gives editors the schema offline.
@@ -43,6 +45,8 @@ Unknown settings are an error, so a typo fails loudly rather than being ignored.
 
 ## Cache
 
-Jev's answers are cached by comment, surrounding code, language, model and `behaviour` in `node_modules/.cache/prolix.json`, or in `.prolixcache` when there is no `node_modules`. Re-runs only ask about new or changed comments, and switching modes, thresholds, `keep` or `remove` needs no new calls. Changing `behaviour` asks again about every comment.
+Validated Jev answers and resolved model versions are cached by comment, surrounding code, language, requested model, API endpoint, prompt hash and `behaviour` in `node_modules/.cache/prolix.json`, or in `.prolixcache` when there is no `node_modules`. Re-runs only ask about new or changed comments, and switching modes, thresholds, `keep` or `remove` needs no new calls. Changing `behaviour` asks again about every comment.
 
 Add `.prolixcache` to `.gitignore` in repos without `node_modules`. The cache only grows, so delete it to reset.
+
+`fixThreshold` is a conservative starting policy, not a calibrated safety probability. JSON reports expose `complete`, `errors`, `resolvedModels`, `promptHash`, and each finding's `fixStatus`. A null `fix` means the finding needs review. Changing the reporting or fix threshold needs no new inference. Pin `TYPESAFE_DEFAULT_MODEL` when comparing release evaluations; `jev-latest` is an alias, and cached answers retain the model that originally produced them.

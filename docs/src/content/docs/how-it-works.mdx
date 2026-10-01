@@ -3,11 +3,11 @@ title: How it works
 description: How prolix finds comments, how Jev judges them, how the judgements are measured, and prolix's known limits.
 ---
 
-1. **Find.** A byte-level lexer finds every comment in the files it walks, in [50 languages](/reference/cli/#languages). It knows each language's strings, heredocs and nested comments, so text that only looks like a comment is left alone.
+1. **Find.** Parsers identify JS/TS/JSX/TSX comments. Other [supported languages](/reference/cli/#languages) use a byte-level lexer and produce review findings. YAML scalar contents are data, so embedded scripts inside them are not scanned.
 2. **Skip directives.** Tool and compiler directives, licences and `prolix-ignore` comments are kept without asking Jev. See [Directives](/reference/modes/#directives).
-3. **Judge.** Each remaining comment goes to [Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev) with a few lines of the code around it. Jev scores it against eleven [categories](/reference/modes/#categories), guided by any [behaviour](/reference/modes/#behaviour) in `prolix.jsonc`. prolix sends up to 32 comments per request and up to 16 requests at a time, and retries rate limits and server errors with backoff.
+3. **Judge.** Each remaining comment goes to [Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev) with a few lines of the code around it. Jev scores it against eleven [categories](/reference/modes/#categories), guided by any [behaviour](/reference/modes/#behaviour) in `prolix.jsonc`. Blocks larger than 2,000 bytes are kept without judgment and make the check incomplete. Identical questions are deduplicated. prolix sends up to 32 comments per request and up to 16 requests at a time, and retries rate limits and server errors with backoff.
 4. **Decide.** A comment is flagged when the chance that it fits a category its mode removes reaches the threshold. `keep` and `remove` change which categories those are.
-5. **Fix.** `--fix` removes each flagged comment, the line it was on if nothing else was, and the blank-line gap it leaves.
+5. **Fix.** Eligible JS/TS/JSX/TSX findings must meet `fixThreshold` (default 0.9). The edit preserves token boundaries and significant line breaks; parsing and structural comparison must preserve executable syntax and literal content. Files are rechecked for concurrent changes before writing. Other findings remain for review.
 
 ## Evals
 
@@ -28,9 +28,12 @@ cargo test --release --test evals -- --ignored --nocapture
 
 ## Known limits
 
-- Comment-like text inside JSX (for example `<p>a // b</p>`) is guarded for `//` but not for `/*`.
+- Automatic fixes are currently limited to parser-validated JS/TS/JSX/TSX; parsing does not prove that a documentation or tool directive is semantically redundant.
+- YAML scalar contents are not scanned as embedded scripts.
 - `{/* */}` comments in Svelte and Astro templates aren't linted.
 - C++ raw strings (`R"(...)"`) aren't recognised.
 - The cache only grows. Delete it to reset.
 
 Found another? [Open an issue](https://github.com/barclayd/prolix/issues).
+
+The checked-in eval corpus is a development set. `EVAL_DATASET_DIR` allows a separate, privately stored corpus with independently reviewed labels and repository-level holdouts. Reports record resolved model versions and a prompt hash. Draft field examples and the review process live in `tests/evals/README.md`.

@@ -73,3 +73,7 @@ Only write a comment when it tells the reader something the code doesn't: why th
 ## These docs as Markdown
 
 Every page is also served as Markdown: add `.md` to its URL, as in [`/setup.md`](https://prolix.barclaysd.workers.dev/setup.md). [`/llms.txt`](https://prolix.barclaysd.workers.dev/llms.txt) lists every page. Each page's title also has a button to copy it as Markdown or open it in ChatGPT, Claude or Cursor.
+
+## Safe edits and incomplete checks
+
+Inspect `complete` before consuming a report. Exit code 2 means the check failed or was incomplete; it must not be treated as a clean result. Comments larger than 2,000 bytes are retained as `skipped`. A `fix` can be null even when `group` is present: inspect `fixStatus` and leave the finding for review. Automatic edits and PR suggestions currently require validated JS/TS/JSX/TSX and meet `fixThreshold` (default 0.9). Exit code 1 after `--fix` means findings remain. Reports include `resolvedModels` and `promptHash` for reproducibility.
