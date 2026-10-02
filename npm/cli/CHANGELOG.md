@@ -1,5 +1,17 @@
 # @prolix/cli
 
+## 0.4.0
+
+### Minor Changes
+
+- [#25](https://github.com/barclayd/prolix/pull/25) [`2de867b`](https://github.com/barclayd/prolix/commit/2de867bf6616779a980b7af52ffeb6bcadda16c5) Thanks [@barclayd](https://github.com/barclayd)! - Resolve obsolete Prolix review threads while preserving discussion and human resolutions. Ignore stale or incomplete checks and reuse existing suggestions.
+
+  Use parsers for JS/TS/JSX/TSX extraction and validate executable structure before automatic removal. Keep YAML scalar data and oversized comment blocks, reject invalid model responses, and report incomplete scans as errors. Automatic fixes and PR suggestions now require a validated JS/TS/JSX/TSX edit and a separate `fixThreshold` (default 0.9); other findings remain available for review.
+
+  Deduplicate pending inference, retain model and prompt provenance, recover short redundant JSDoc and Python inline comments, and support external evaluation corpora through `EVAL_DATASET_DIR`.
+
+  Move GitHub review orchestration into Rust with shared typed reports, a single scan per action run, direct GitHub API access, and `prolix github review --dry-run`. Preserve existing review metadata and the npm installation path.
+
 ## 0.3.0
 
 ### Minor Changes
