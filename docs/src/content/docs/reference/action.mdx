@@ -3,7 +3,7 @@ title: GitHub Action
 description: Inputs, outputs and behaviour of barclayd/prolix, the GitHub Action that reviews the comments a pull request adds.
 ---
 
-`barclayd/prolix@v0` runs prolix on the lines a pull request adds. When it flags something, it posts a summary comment and a one-click suggestion to remove each flagged comment. Later runs update the same summary comment, which turns to ✅ once the pull request is clean. They don't repeat suggestions, and they delete ones that no longer apply.
+`barclayd/prolix@v0` runs prolix on the lines a pull request adds. When it flags something, it posts a summary comment and one-click suggestions for findings with validated fixes. Later runs update the same summary comment, which turns to ✅ once the pull request is clean. They reuse existing suggestions and resolve their review threads once the underlying finding no longer applies, preserving the discussion.
 
 ```yaml title=".github/workflows/prolix.yml"
 name: prolix
@@ -32,7 +32,7 @@ jobs:
 | `mode` | `prolix.jsonc`, then `standard` | `off`, `standard` or `strict`. See [Modes](/reference/modes/). `level` is the old name. |
 | `scope` | `changed` | `changed` checks comments on the lines the pull request adds. `full` checks the whole repository. Events other than pull requests always check the whole repository. |
 | `comment` | `true` | Post a summary comment when something is flagged, and keep it up to date. |
-| `suggestions` | `true` | Post a review suggestion that removes each flagged comment. Needs `scope: changed` and the checkout described below. |
+| `suggestions` | `true` | Post a review suggestion for each finding with a validated fix. Needs `scope: changed` and the checkout described below. |
 | `fail-on-findings` | `false` | Fail the job when anything is flagged, instead of only advising. |
 | `version` | `latest` | The `@prolix/cli` version to run, such as `0.1.0` or a canary version. |
 
@@ -55,6 +55,8 @@ The job needs `pull-requests: write` to comment and suggest. Without it the acti
 ## Behaviour
 
 - Exit code 2 from prolix, such as a bad config or Jev being unreachable, fails the step. Findings only fail it with `fail-on-findings: true`.
+- A complete check of the current PR head resolves obsolete threads owned by the Actions bot. Human resolutions are respected. Unchanged source with a fluctuating model score, incomplete checks, and older runs leave existing threads open. Legacy suggestions are recognised using their original source range.
+- Suggestions require a complete report from the current CLI, a score at or above `fixThreshold`, and a validated JS/TS/JSX/TSX edit. Findings without a safe fix still appear in the summary.
 - Each run posts at most 50 new suggestions. The summary comment lists everything flagged.
 - The summary comment is created only once something is flagged, so clean pull requests stay quiet.
 
@@ -78,3 +80,20 @@ Try a canary build from a pull request to prolix:
     api-key: ${{ secrets.TYPESAFE_API_KEY }}
     version: 0.1.1-canary-abc1234
 ```
+
+## Implementation and local dry runs
+
+The composite action installs Prolix through the existing npm launcher and calls `prolix github action`. Rust owns the scan, shared report types, summary formatting, GitHub API calls and thread reconciliation. Each action run scans once; its summary and suggestions use the same result. The action does not require `gh` or `jq`.
+
+This action revision needs a CLI containing the `github action` command (0.4.0 or a corresponding canary/local build). Its protocol argument makes older CLIs fail explicitly. Keep the action revision and the `version` input compatible.
+
+To inspect a proposed review locally, check out the PR head with full history, set `GH_TOKEN` (or `GITHUB_TOKEN`) and `TYPESAFE_API_KEY`, then run:
+
+```sh
+prolix github review --repository owner/repo --pr 123 \
+  --base origin/main --dry-run --bot-login github-actions
+```
+
+The JSON plan lists summary edits, suggestions, updates and thread resolutions. A dry run reads GitHub and may call Jev, but never posts or resolves anything. `--bot-login` lets a local dry run match the Actions bot's existing threads; it is rejected outside a dry run. Omit it when using the bot's own credentials.
+
+Use `--no-comment` or `--no-suggestions` to disable those parts of the plan, and `--fail-on-findings` to return exit code 1 when findings remain. Incomplete checks return 2. The action preserves its existing advisory behaviour when GitHub posting fails. GitHub Enterprise installations use `GITHUB_API_URL` and `GITHUB_GRAPHQL_URL`.

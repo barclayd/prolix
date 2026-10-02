@@ -24,7 +24,7 @@ prolix [paths...] [--fix] [--changed[=<ref>]] [--mode <mode>] [--reporter <repor
 export TYPESAFE_API_KEY=...        # from typesafe.ai
 prolix                             # check the current directory
 prolix src lib --mode strict       # check specific paths in strict mode
-prolix --fix                       # remove everything flagged
+prolix --fix                       # apply validated fixes; review remaining findings
 prolix --changed=main              # only comments on lines added since the branch left main
 prolix --changed --fix             # remove flagged comments in uncommitted changes
 prolix --reporter json             # machine-readable output with Jev's probabilities and each fix
@@ -33,7 +33,7 @@ prolix --reporter markdown         # a summary for a pull request comment or job
 
 | Option | Default | |
 | --- | --- | --- |
-| `--fix` | | Remove the flagged comments, the lines they leave empty and the blank-line gaps around them. |
+| `--fix` | | Apply validated JS/TS/JSX/TSX fixes meeting `fixThreshold`. Other findings remain for review. |
 | `--changed[=<ref>]` | `HEAD` | Only check comments on lines added since the merge base with `<ref>`. |
 | `--mode <mode>` | `prolix.jsonc`, then `standard` | `off`, `standard` or `strict`. See [Modes](/reference/modes/). `--level` is the old name. |
 | `--reporter <reporter>` | `text` | `text`, `json` or `markdown`. The JSON shape is described in [Use with coding agents](/agents/#machine-readable-output). |
@@ -44,20 +44,24 @@ prolix --reporter markdown         # a summary for a pull request comment or job
 
 | Code | Meaning |
 | --- | --- |
-| 0 | nothing flagged, or `--fix` succeeded |
-| 1 | comments flagged |
-| 2 | error: bad config, missing key or Jev unreachable |
+| 0 | nothing flagged, or all findings fixed |
+| 1 | findings remain, including those without an eligible fix |
+| 2 | error or incomplete check: bad config, missing key, invalid source, unreadable files, oversized comments or invalid Jev answers |
 
 ## Which files are checked
 
 - The walk respects `.gitignore`, `.ignore` and the `ignore` globs in [`prolix.jsonc`](/reference/configuration/).
 - It skips hidden files and directories, such as `.github`, unless you pass them as paths.
-- It skips files over 1 MB, such as minified bundles.
+- Supported files over 1 MB are excluded and make the check incomplete. Explicitly ignore known generated files. Comment blocks over 2,000 bytes are retained and reported as skipped.
 
 `--changed` reads `git diff` against the merge base of `<ref>` and `HEAD`, so it counts uncommitted edits and untracked files. It checks only comments that touch added lines, including ones in hidden directories, and sends only those to Jev. In a shallow clone with no merge base, it compares with `<ref>` itself.
 
 ## Languages
 
-prolix finds comments with a byte-level lexer that knows each language's strings, heredocs and nested comments, so text that only looks like a comment is left alone. It supports:
+JS/TS/JSX/TSX use syntax parsers and support validated automatic fixes. Other languages use a byte-level lexer and currently provide review findings without automatic fixes. Detection is available for:
 
 Astro, C, C#, C++, CMake, CSS, Dart, Dockerfile, Elixir, Elm, F#, Go, GraphQL, Groovy, Haskell, HCL and Terraform, HTML, Java, JavaScript and JSX, JSONC, Julia, Kotlin, Less, Lisp, Lua, Makefile, Nim, Nix, OCaml, Perl, PHP, PowerShell, Protobuf, Python, R, Ruby, Rust, Sass, Scala, SCSS, Shell, Solidity, SQL, Svelte, Swift, TOML, TypeScript and TSX, Vue, XML and YAML.
+
+## GitHub reviews
+
+`prolix github review` scans once and reconciles its results with a pull request. `--dry-run` prints the proposed changes without posting them. See [local review commands](/reference/action/#implementation-and-local-dry-runs) for credentials, checkout requirements and options, or run `prolix github review --help`.

@@ -62,7 +62,7 @@ In YAML, TOML, HCL, JSONC, Dockerfiles, Makefiles and CMake, comments often labe
 prolix never sends tool and compiler directives to Jev, and never removes them. It recognises them by their shape rather than by a list of tool names, so it also respects a linter it has never heard of:
 
 - a switch word joined to a name or followed by a rule: `eslint-disable-next-line`, `react-doctor-disable-line`, `biome-ignore`, `# hadolint ignore=DL3008`, `/* c8 ignore next */`
-- `no…` markers and `tool:setting` tokens: `# noqa: E501`, `// NOLINTNEXTLINE`, `# rubocop:disable`, `//go:build`, `// gitleaks:allow`
+- recognised `noqa`, `nolint`, `nosec` and `NOSONAR` markers and `tool:setting` tokens: `# noqa: E501`, `// NOLINTNEXTLINE`, `# rubocop:disable`, `//go:build`, `// gitleaks:allow`
 - tags and settings: `@ts-expect-error`, `$FlowFixMe`, `# shellcheck source=lib.sh`, `# syntax=docker/dockerfile:1`, `/* webpackChunkName: "x" */`
 - version pins beside a hash, as in `uses: actions/checkout@<sha> # v4.1.1`
 - shebangs, pragmas, regions, `/*!` licence headers, copyright and SPDX lines, `@generated` markers and `/// <reference>`

@@ -21,7 +21,7 @@ The GitHub Action only checks the lines a pull request adds, so turning it on ne
 
 1. **Set up the workflow first**, as in [Set up](/setup/). From then on, new comments are checked as they arrive, so the backlog only shrinks.
 
-2. **Count the comments.** `--mode off` checks without asking Jev, so its stats show how many comments a real run would send:
+2. **Count the comments.** `--mode off` checks without asking Jev, so its stats show eligible comment units after protection rules. Duplicates may share a single Jev request:
 
    ```sh
    npx @prolix/cli --mode off --reporter json | jq .stats.comments
@@ -41,7 +41,7 @@ The GitHub Action only checks the lines a pull request adds, so turning it on ne
    npx @prolix/cli src/components --mode standard --fix
    ```
 
-4. **Review the diff** like any other. `--fix` removes each comment, the line it was on if nothing else was, and the blank-line gap it leaves. To keep a comment it removed, restore it and add `prolix-ignore` to it:
+4. **Review the diff** like any other. `--fix` applies only validated JS/TS/JSX/TSX edits meeting `fixThreshold`. Lower-confidence findings and other languages remain for manual review; exit code 1 means findings remain. Exit code 2 means an error occurred. Incomplete scans apply no fixes; inspect the error before continuing. To keep a comment it removed, restore it and add `prolix-ignore` to it:
 
    ```ts
    // Pinned to 3.x until the upstream fix ships. prolix-ignore
